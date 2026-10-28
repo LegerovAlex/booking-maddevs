@@ -1,30 +1,30 @@
-# Бронирование переговорной комнаты
+# Meeting Room Booking
 
-- **Демо:** [https://booking-maddevs.vercel.app/]
-- **Переписка с AI:** [`AI CHAT.txt`](./AI%20CHAT.txt)
-- **Затраченное время:** 4 часа
+- **Demo:** https://booking-maddevs.vercel.app/
+- **AI chat:** [`AI CHAT.txt`](./AI%20CHAT.txt)
+- **Time spent:** 4 hours
 
-## Как запустить
+## How to run
 
 ```bash
 npm install
 npm run dev
 ```
 
-Mock API (MSW) включается автоматически через `VITE_API_MOCKING=true` в `.env`.
+The mock API (MSW) is enabled automatically via `VITE_API_MOCKING=true` in `.env`.
 
-## Что сделано
+## What's done
 
-- Выбор даты, таймлайн броней на день, создание, редактирование и удаление.
-- Все бизнес-правила 1–8 проверяются и на клиенте, и в mock API.
-- Состояния загрузки, пустого дня, ошибки и отправки формы.
-- Сетевой слой отделён от UI и заменяется на реальный API через `VITE_API_URL`.
+- Date selection, a day timeline of bookings, creating, editing and deleting bookings.
+- All business rules 1–8 are validated both on the client and in the mock API.
+- Loading, empty day, error and form submission states.
+- The network layer is separated from the UI and can be switched to a real API via `VITE_API_URL`.
 
-**Правило 8:** mock API специально возвращает 409 на каждое второе успешное сохранение, чтобы можно было проверить обработку конфликта.
+**Rule 8:** the mock API intentionally returns 409 on every second successful save, so conflict handling can be checked.
 
-## Что не сделано
+## What's not done
 
-- Тесты на основную функциональность.
-- Переделал бы архитектуру, связанную с удалением и редактированием.
-- Сделал бы UX более доступным.
-- Мобильная версия (только десктоп).
+- Tests for the core functionality.
+- I would rework the architecture around deleting and editing.
+- I would make the UX more accessible.
+- Mobile version (desktop only).
