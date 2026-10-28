@@ -1,0 +1,3921 @@
+  ⎿  [Image #1]
+
+> Привет, будем делать тестовое, запомни оснавные требование и сделай план то
+  что надо реализовать.  Будем использовать vite, react, ts, tanstack query,
+  axios,mui, mui icons, rhf, yup, dayjs, mui data picker, eslint + prettier
+  msw для mock api и тд, архитектурно будет fsd облегченная. Визуально как
+  будет выглядить я уже нагенерировал скрин тебе дал, мобильной версии не будет
+  только декстоп, шаг для выбора пользователя времени будет кратный 15 минутам
+
+  Searched for 1 pattern, recalled 2 memories, wrote 2 memories (ctrl+o to expand)
+
+● Запомнил: обновил память с бизнес-правилами и стеком. Добавил то, чего там ещё
+  не было: dayjs, MUI Date Picker, ESLint + Prettier, только десктоп, шаг
+  выбора 15 минут и раскладку экрана по твоему скрину. Шаг 15 минут заменяет
+  прежнее решение «любые минуты».
+
+  План реализации
+
+  0. Каркас (~30 мин)
+
+  - Vite + React + TS (strict), ESLint (typescript-eslint, react-hooks) +
+    Prettier, alias @/.
+  - Зависимости: @tanstack/react-query, axios, @mui/material,
+    @mui/icons-material, @mui/x-date-pickers, dayjs, react-hook-form, yup,
+    @hookform/resolvers, msw; в dev — vitest.
+  - Тёмная тема MUI, LocalizationProvider (dayjs), QueryClientProvider.
+
+  1. Структура (облегчённая FSD)
+
+  src/
+    app/        providers (theme, query, date-pickers), запуск MSW, App
+    pages/      booking-page — сборка экрана
+    widgets/    day-timeline (левая карточка), booking-panel (правая)
+    features/   date-navigation, booking-form (create/edit), delete-booking
+    entities/   booking: types, api, query keys/hooks, model/rules.ts,
+  BookingBlock
+    shared/     api (axios-инстанс, ApiError), lib/time (HH:mm ↔ минуты, слоты
+  по 15 мин), config (09:00/18:00, 30/120 мин, шаг 15)
+    mocks/      msw handlers, in-memory db + seed, browser.ts
+
+  2. Доменная логика — один чистый модуль (~45 мин)
+
+  entities/booking/model/rules.ts. Он не зависит от React и axios. Его
+  используют и yup-схема, и MSW-хэндлеры.
+  - toMinutes / fromMinutes, overlaps(a, b) = a.start < b.end && b.start <
+    a.end: касание границ не считается пересечением.
+  - validateBooking(input, existing, now, excludeId?) возвращает коды ошибок по
+    правилам 1–7. При редактировании excludeId исключает саму бронь, это
+    правило 7.
+  - getAvailableOptions(date, bookings, now, editingId) строит варианты
+    Start/End с шагом 15 минут. Прошедшие и занятые варианты выключены
+    (disabled), End зависит от выбранного Start: от +30 до +120 минут, но не
+    дальше 18:00 и не дальше следующей брони.
+  - Unit-тесты на этот модуль в vitest. Это самое ценное для проверяющего.
+
+  3. Mock API на MSW (~45 мин)
+
+  - GET/POST/PATCH/DELETE /api/bookings по контракту, задержка 300–800 мс.
+  - Сервер сам проверяет правила через тот же validateBooking: 400/422 для
+    ошибок валидации, 409 для конфликта, 404 если брони нет.
+  - Хранение в памяти + seed с бронями на сегодня и завтра. Можно сохранять в
+    localStorage, чтобы данные переживали перезагрузку.
+  - Демонстрация правила 8: при POST/PATCH «другой пользователь» иногда занимает
+    слот (сервер вставляет фантомную бронь и отвечает 409). Плюс
+    dev-переключатель «Simulate conflict», чтобы показать это поведение
+    гарантированно.
+  - MSW включён и в прод-сборке, чтобы демо на Vercel работало.
+
+  4. Сетевой слой (~30 мин)
+
+  - shared/api/http.ts — axios-инстанс; interceptor превращает ошибки в ApiError
+    { status, code, message }.
+  - entities/booking/api/bookingApi.ts — интерфейс BookingApi и реализация на
+    axios. UI знает только про интерфейс, поэтому замена на реальный API — одна
+    строка.
+  - TanStack Query: ключи ['bookings', date], хуки useBookings(date),
+    useCreateBooking, useUpdateBooking, useDeleteBooking; после мутации
+    invalidateQueries.
+
+  5. UI (~2 ч)
+
+  - Шапка: заголовок, кнопки ‹ дата ›, DatePicker по клику на дату, кнопка
+    «Today».
+  - Таймлайн: шкала 09:00–18:00 с подписью каждые 30 минут, блоки броней
+    абсолютно спозиционированы по минутам. На блоке иконки edit/delete с
+    aria-label. Текущий выбор формы рисуется пунктирным блоком «Selected». Клик
+    по пустому месту подставляет время начала в форму (nice-to-have).
+  - Состояния: скелетон при загрузке; пустое состояние «No bookings for this
+    day»; ошибка с кнопкой Retry; у прошедшей даты баннер «Past date —
+    read-only».
+  - Форма (RHF + yup): Title (необязательно, ограничение длины), Start/End через
+    Select с выключенными вариантами, подсказка «Duration 1h · 30 min to 2 h».
+    Режимы New/Edit, Cancel сбрасывает форму в New. На время отправки кнопка
+    заблокирована и показывает спиннер.
+  - Ошибки сервера:
+    - 409 → Alert «This slot was just taken…», перезапрос броней, введённые
+      значения остаются в форме;
+    - 422 → ошибка у нужного поля;
+    - сетевая ошибка → общий алерт.
+  - Удаление: диалог подтверждения, затем Snackbar об успехе.
+  - Доступность: label у всех полей, aria-live для ошибок, фокус после
+    сохранения/отмены, навигация с клавиатуры, видимый фокус.
+
+  6. Финал (~45 мин)
+
+  README (запуск, что сделано и что нет, решения, затраченное время), деплой на
+  Vercel, проверка линтером/типами, экспорт переписки с AI.
+
+  Нужно согласовать
+
+  1. Адаптивность есть в критериях оценки, а мобилку мы не делаем. Предлагаю
+     минимум: две колонки на десктопе, а на узком окне колонки просто встают
+     друг под друга, без отдельной мобильной вёрстки. В README отметить, что это
+     осознанное решение. Ок?
+  2. Прошедшие брони. Что делать с бронями на прошедших датах и с уже
+     начавшимися сегодня? Предлагаю: только просмотр, без редактирования.
+     Удаление — тоже нет?
+  3. «Сейчас» на сегодня. Первый доступный Start — ближайшая отметка кратная 15
+     минутам после текущего времени (в 10:07 первый Start — 10:15). Ок?
+  4. Демонстрация 409. Случайный конфликт + переключатель в UI, или только
+     переключатель?
+
+  Как ответишь — начну с шагов 0–2.
+
+> установи зависимости, темные темы никаке не нужно и сделай структуру основных
+  папок, на этом пока все
+
+  Searched for 1 pattern, read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● Scaffold готов (шаблон Vite использует oxlint — заменю на ESLint + Prettier,
+  как договаривались). Ставлю зависимости.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● typescript-eslint пока не поддерживает TypeScript 7, поэтому откатываю TS на
+  стабильную ветку 6.0, совместимую с линтером.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Зависимости стоят. Теперь конфиги (ESLint, Prettier, алиас @/) и структура
+  папок.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Update(package.json)
+  ⎿  Added 5 lines, removed 1 line
+       6    "scripts": {
+       7      "dev": "vite",
+       8      "build": "tsc -b && vite build",
+       9 -    "lint": "oxlint",                                          
+       9 +    "lint": "eslint .",                                        
+      10 +    "format": "prettier --write .",                            
+      11 +    "format:check": "prettier --check .",                      
+      12 +    "typecheck": "tsc -b",                                     
+      13 +    "test": "vitest",                                          
+      14      "preview": "vite preview"
+      15    },
+      16    "dependencies": {
+
+● Теперь минимальный каркас app/ — провайдеры (светлая тема MUI, QueryClient,
+  dayjs для пикеров), чтобы проект собирался.
+
+● Write(src\main.tsx)
+  ⎿  Added 1 line, removed 2 lines
+      1  import { StrictMode } from 'react'
+      2  import { createRoot } from 'react-dom/client'
+      3 -import './index.css'                                            
+      4 -import App from './App.tsx'                                     
+      3 +import { App } from '@/app/App'                                 
+      4  
+      5  createRoot(document.getElementById('root')!).render(
+      6    <StrictMode>
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Линт и сборка проходят. Обновлю память: тема светлая, TS закреплён на 6.0.
+
+  Wrote 1 memory (ctrl+o to expand)
+
+● Зависимости установлены, структура папок создана. npm run lint проходит без
+  ошибок, npm run build собирается.
+
+  Проект. Создал на Vite (React + TS). Из шаблона удалил демо-файлы и oxlint.
+
+  Зависимости:
+  - Основные: TanStack Query, axios, MUI + иконки (+ emotion), MUI X Date
+    Pickers, dayjs, react-hook-form, yup, @hookform/resolvers.
+  - Для разработки: MSW (воркер уже лежит в public/), ESLint с поддержкой TS и
+    react-hooks, Prettier, vitest.
+
+  TypeScript откатил с 7 на 6.0. Шаблон Vite ставит TS 7, но typescript-eslint
+  пока поддерживает только версии ниже 6.1, и с TS 7 линтер не устанавливается.
+
+  Конфиги:
+  - eslint.config.js и .prettierrc.
+  - Алиас @/ → src: прописан в vite.config.ts и tsconfig.app.json.
+  - В tsconfig.app.json включил strict.
+  - Добавил скрипты lint, format, format:check, typecheck, test.
+
+  Структура:
+  src/
+    app/        App.tsx, providers/AppProviders.tsx (QueryClient, светлая тема
+  MUI, LocalizationProvider)
+    pages/      booking/
+    widgets/    day-timeline/, booking-panel/
+    features/   date-navigation/, booking-form/, delete-booking/
+    entities/   booking/{api,model,ui}/
+    shared/     api/, config/, lib/, ui/
+    mocks/
+  В пустые папки положил .gitkeep, чтобы они попали в git. Тема — стандартная
+  светлая MUI, тёмной нет.
+
+  Git-репозиторий ещё не создан. Если нужно, сделаю git init и первый коммит.
+
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\mocks\.gitkeep in the IDE. This may or may
+  not be related to the current task.</ide_opened_file>
+
+> удали пока все эти папки вложенные оставь пока layers пустые
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Удалил все вложенные папки. В слоях pages, widgets, features, entities, shared
+  и в mocks остался только .gitkeep, чтобы пустые папки попали в git.
+
+  Слой app я не очищал. В нём лежат App.tsx и providers/AppProviders.tsx — это
+  код, а не заготовки папок. Их импортирует main.tsx, и без них проект не
+  соберётся. Если app тоже нужно очистить, скажи — тогда временно перенесу
+  минимальный App прямо в main.tsx.
+
+  src/
+    app/        App.tsx, providers/AppProviders.tsx
+    pages/      (пусто)
+    widgets/    (пусто)
+    features/   (пусто)
+    entities/   (пусто)
+    shared/     (пусто)
+    mocks/      (пусто)
+    main.tsx
+
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\package.json in the IDE. This may or may not
+  be related to the current task.</ide_opened_file>
+
+> gitkeep тоже удали все
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Удалил все .gitkeep. Папки pages, widgets, features, entities, shared и mocks
+  теперь полностью пустые. В app по-прежнему лежат App.tsx и
+  providers/AppProviders.tsx.
+
+  Git не сохраняет пустые папки. Если закоммитить сейчас, эти шесть папок не
+  попадут в репозиторий, пока в них не появятся файлы.
+
+> и напиши сейчас что ты подключил и настроил и что нужно будет
+
+● Перечисляю, что сейчас установлено и настроено в проекте и что осталось
+  сделать.
+
+  Что подключено
+
+  Основные зависимости:
+
+  ┌───────────────────────────────────┬─────────────────────────────────────┐
+  │               Пакет               │                Зачем                │
+  ├───────────────────────────────────┼─────────────────────────────────────┤
+  │ react 19 + react-dom              │ UI                                  │
+  ├───────────────────────────────────┼─────────────────────────────────────┤
+  │ @tanstack/react-query 5           │ загрузка броней с сервера и мутации │
+  ├───────────────────────────────────┼─────────────────────────────────────┤
+  │ axios                             │ HTTP-клиент                         │
+  ├───────────────────────────────────┼─────────────────────────────────────┤
+  │ @mui/material 9 + @emotion/react, │ UI-компоненты (emotion нужен MUI    │
+  │  @emotion/styled                  │ для стилей)                         │
+  ├───────────────────────────────────┼─────────────────────────────────────┤
+  │ @mui/icons-material               │ иконки (редактировать/удалить,      │
+  │                                   │ стрелки, календарь)                 │
+  ├───────────────────────────────────┼─────────────────────────────────────┤
+  │ @mui/x-date-pickers + dayjs       │ выбор даты, работа с датой и        │
+  │                                   │ временем                            │
+  ├───────────────────────────────────┼─────────────────────────────────────┤
+  │ react-hook-form + yup +           │ форма и валидация                   │
+  │ @hookform/resolvers               │                                     │
+  └───────────────────────────────────┴─────────────────────────────────────┘
+
+  Для разработки:
+
+  ┌───────────────────────────────────────────┬─────────────────────────────┐
+  │                   Пакет                   │            Зачем            │
+  ├───────────────────────────────────────────┼─────────────────────────────┤
+  │ vite 8 + @vitejs/plugin-react             │ сборка и dev-сервер         │
+  ├───────────────────────────────────────────┼─────────────────────────────┤
+  │                                           │ типизация (закреплён на     │
+  │ typescript ~6.0                           │ 6.0: typescript-eslint не   │
+  │                                           │ поддерживает TS 7)          │
+  ├───────────────────────────────────────────┼─────────────────────────────┤
+  │ msw 3                                     │ mock API                    │
+  ├───────────────────────────────────────────┼─────────────────────────────┤
+  │ eslint + typescript-eslint +              │                             │
+  │ eslint-plugin-react-hooks +               │ линтер                      │
+  │ eslint-plugin-react-refresh + globals     │                             │
+  ├───────────────────────────────────────────┼─────────────────────────────┤
+  │ prettier + eslint-config-prettier         │ форматирование без          │
+  │                                           │ конфликтов с ESLint         │
+  ├───────────────────────────────────────────┼─────────────────────────────┤
+  │ vitest                                    │ тесты бизнес-правил         │
+  └───────────────────────────────────────────┴─────────────────────────────┘
+
+  Что настроено
+
+  - eslint.config.js: рекомендованные правила JS/TS и react-hooks,
+    consistent-type-imports, совместимость с Prettier. Игнорирует dist и воркер
+    MSW.
+  - .prettierrc: без точек с запятой, одинарные кавычки, trailing comma, ширина
+    строки 100. .prettierignore исключает сборку, lock-файл и воркер MSW.
+  - Алиас @/ → src: в vite.config.ts и в paths в tsconfig.app.json. Там же
+    включён strict.
+  - Скрипты в package.json: dev, build, lint, format, format:check, typecheck,
+    test, preview.
+  - MSW: воркер public/mockServiceWorker.js создан командой msw init, путь к
+    нему записан в package.json.
+  - AppProviders.tsx (src/app/providers/AppProviders.tsx): QueryClient (retry:
+    1, без перезапроса при фокусе окна), стандартная светлая тема MUI +
+    CssBaseline, LocalizationProvider с dayjs.
+  - App.tsx (src/app/App.tsx) пока выводит только заголовок, main.tsx
+    (src/main.tsx) монтирует App.
+  - Пустые слои: pages, widgets, features, entities, shared, mocks.
+
+  npm run lint и npm run build проходят без ошибок.
+
+  Что осталось сделать
+
+  1. shared: константы рабочего дня (09:00–18:00, 30/120 мин, шаг 15), утилиты
+     времени (HH:mm ↔ минуты, варианты по 15 мин), axios-инстанс и единый тип
+     ошибки ApiError.
+  2. entities/booking: тип Booking, бизнес-правила одним модулем без
+     зависимостей от React (их используют и форма, и mock-сервер), API-клиент за
+     интерфейсом, хуки Query, блок брони.
+  3. mocks: хранение в памяти + стартовые брони, обработчики
+     GET/POST/PATCH/DELETE с проверкой правил и ответами 409/422/404, задержка,
+     имитация конфликта (правило 8). Запуск MSW в main.tsx, в том числе в
+     прод-сборке, чтобы работало демо.
+  4. features: переключение даты, форма создания и редактирования (RHF + yup,
+     Select с шагом 15 мин, обработка 409 без потери введённых данных), удаление
+     с подтверждением.
+  5. widgets и pages: таймлайн дня, правая панель с формой, страница по скрину.
+     Состояния загрузки, пустого списка, ошибки и отправки; базовая доступность
+     (a11y).
+  6. Тесты: vitest на бизнес-правила.
+  7. Сдача: git init и репозиторий, README (запуск, что сделано и что нет,
+     затраченное время), деплой на Vercel, экспорт переписки с AI.
+
+  Нужно решить три открытых вопроса из плана:
+  - Можно ли редактировать или удалять прошедшие брони, или они только для
+    просмотра?
+  - Первый доступный старт на сегодня — ближайшее время, кратное 15 минутам,
+    после текущего?
+  - Как показывать 409: случайно, через переключатель или и так, и так?
+
+> <ide_selection>The user selected the lines 1 to 10 from
+  c:\Users\Admin\Desktop\MadDevs\src\main.tsx:
+  import { StrictMode } from 'react'
+  import { createRoot } from 'react-dom/client'
+  import { App } from '@/app/App'
+
+  createRoot(document.getElementById('root')!).render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  )
+
+  This may or may not be related to the current task.</ide_selection>
+
+> так давай делать начнем с того что сделаем контроакт booking из тз,
+
+● Write(src\entities\booking\index.ts)
+  ⎿  Wrote 8 lines to src\entities\booking\index.ts
+      1 export type {
+      2   Booking,
+      3   BookingDate,
+      4   BookingTime,
+      5   GetBookingsParams,
+      6   CreateBookingPayload,
+      7   UpdateBookingPayload,
+      8 } from './model/types'
+
+● Write(src\entities\booking\index.ts)
+  ⎿  Added 1 line, removed 8 lines
+      1 -export type {                                                   
+      2 -  Booking,                                                      
+      3 -  BookingDate,                                                  
+      4 -  BookingTime,                                                  
+      5 -  GetBookingsParams,                                            
+      6 -  CreateBookingPayload,                                         
+      7 -  UpdateBookingPayload,                                         
+      8 -} from './model/types'                                          
+      1 +export type { Booking, BookingInput, BookingPatch } from './mode
+        +l/types'                                                        
+  Ran 1 shell command (ctrl+o to expand)
+
+● Добавил тип брони по контракту из ТЗ и два производных типа — BookingInput и
+  BookingPatch, без комментариев. Проверка типов (tsc) проходит без ошибок.
+  Ошибки, которые IDE показывала после записи файла, относились к первой версии
+  index.ts с уже удалёнными именами.
+
+  src/entities/booking/model/types.ts:
+  export type Booking = {
+    id: string
+    date: string
+    start: string
+    end: string
+    title?: string
+  }
+
+  export type BookingInput = Omit<Booking, 'id'>
+
+  export type BookingPatch = Partial<BookingInput>
+
+  src/entities/booking/index.ts — публичный API сущности, наружу отдаёт Booking,
+  BookingInput и BookingPatch.
+
+  BookingPatch сделал частичным: для PATCH это стандартно. Если форма всегда
+  отправляет все поля, можно сделать его равным BookingInput.
+
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\entities\booking\model\types.ts in the
+  IDE. This may or may not be related to the current task.</ide_opened_file>
+
+> окей и правила давай напишем сразу для букинга, степ определились пока 15
+  минут делаем
+
+● Write(src\entities\booking\index.ts)
+  ⎿  User rejected write to src\entities\booking\index.ts
+       1 export type { Booking, BookingInput, BookingPatch } from './mode
+         l/types'
+       2 export {
+       3   WORKING_DAY_START,
+       4   WORKING_DAY_END,
+       5   MIN_DURATION_MINUTES,
+       6   MAX_DURATION_MINUTES,
+       7   TIME_STEP_MINUTES,
+       8   BOOKING_RULE_MESSAGES,
+       9   isOverlapping,
+      10   findConflict,
+     … +6 lines
+
+> константу создать для букинга, начало дня, конец, шаг, и тд
+
+● Write(src\entities\booking\index.ts)
+  ⎿  Added 1 line
+      1  export type { Booking, BookingInput, BookingPatch } from './mode
+         l/types'
+      2 +export { BOOKING_CONFIG } from './model/constants'              
+
+  Wrote 2 memories (ctrl+o to expand)
+
+● Создал константы для брони одним объектом в constants.ts
+  (src/entities/booking/model/constants.ts) и экспортировал его из index.ts
+  (src/entities/booking/index.ts). Проверку типов и линтер после этого не
+  запускал.
+
+  export const BOOKING_CONFIG = {
+    workingDayStart: '09:00',
+    workingDayEnd: '18:00',
+    timeStepMinutes: 15,
+    minDurationMinutes: 30,
+    maxDurationMinutes: 120,
+  } as const
+
+  Начало и конец дня записал в формате HH:mm, как в контракте, а длительности и
+  шаг — в минутах. Если удобнее держать отдельные константы вместо одного
+  объекта, переделаю.
+
+  Ещё запомнил на будущее: делать только тот шаг, о котором ты просишь, и не
+  оставлять комментарии в коде.
+
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\entities\booking\model\constants.ts in the
+  IDE. This may or may not be related to the current task.</ide_opened_file>
+
+> по fsd не туда положил, в confige должно быть не?
+
+● Да, по FSD константы относятся к сегменту config, а model — для типов,
+  состояния и логики. Переношу файл в entities/booking/config/.
+
+● Update(src\entities\booking\index.ts)
+  ⎿  Added 1 line, removed 1 line
+      1  export type { Booking, BookingInput, BookingPatch } from './mode
+         l/types'
+      2 -export { BOOKING_CONFIG } from './model/constants'              
+      2 +export { BOOKING_CONFIG } from './config/constants'             
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Перенёс константы в entities/booking/config/constants.ts
+  (src/entities/booking/config/constants.ts) и поправил экспорт в index.ts
+  (src/entities/booking/index.ts). Проверка типов (tsc) проходит.
+
+  entities/booking/
+    config/constants.ts   BOOKING_CONFIG
+    model/types.ts        Booking, BookingInput, BookingPatch
+    index.ts
+
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\entities\booking\index.ts in the IDE. This
+  may or may not be related to the current task.</ide_opened_file>
+
+> а теперь то что ты , по строкам мы же тут сравнивать не будем, напиши
+  регулярки и фнукции которые нужны
+
+● Write(src\shared\lib\time.ts)
+  ⎿  Wrote 22 lines to src\shared\lib\time.ts
+       1 import dayjs from 'dayjs'
+       2
+       3 export const TIME_REGEX = /^([01]\d|2[0-3]):[0-5]\d$/
+       4 export const DATE_REGEX = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d
+         |3[01])$/
+       5
+       6 export const DATE_FORMAT = 'YYYY-MM-DD'
+       7
+       8 export const isValidTime = (value: string) => TIME_REGEX.test(va
+         lue)
+     … +14 lines (ctrl+o to expand)
+
+  Ran 1 shell command, wrote 1 memory (ctrl+o to expand)
+
+● Хорошо, tsc и eslint больше не запускаю — запомнил, что проверяешь сам. Этот
+  файл я тоже не проверял.
+
+  Добавил src/shared/lib/time.ts. Время сравниваем в минутах, а не строками:
+
+  - TIME_REGEX — HH:mm, от 00:00 до 23:59.
+  - DATE_REGEX — YYYY-MM-DD, месяц 01–12, день 01–31.
+  - DATE_FORMAT — 'YYYY-MM-DD', нужен для dayjs.
+  - isValidTime(value) — проверка по регулярке.
+  - isValidDate(value) — регулярка плюс проверка через dayjs, что дата
+    существует. Например, 2026-02-30 не пройдёт: dayjs переведёт её в
+    2026-03-02, и строки не совпадут.
+  - timeToMinutes('10:30') → 630.
+  - minutesToTime(630) → '10:30'.
+
+  Положил в shared/lib, потому что эти функции не зависят от брони и пригодятся
+  и форме, и mock-серверу.
+
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\shared\lib\time.ts in the IDE. This may or
+  may not be related to the current task.</ide_opened_file>
+
+> padStart напомни что это ?
+
+● padStart — метод строки. Он дополняет строку слева указанным символом, пока
+  она не станет нужной длины.
+
+  str.padStart(targetLength, padString)
+
+  - targetLength — какой длины должна стать строка.
+  - padString — чем дополнять слева (по умолчанию пробел).
+
+  Если строка уже не короче targetLength, она возвращается без изменений.
+
+  '9'.padStart(2, '0')   // '09'
+  '15'.padStart(2, '0')  // '15'
+  '5'.padStart(4, '0')   // '0005'
+
+  В minutesToTime он нужен, чтобы часы и минуты всегда были двузначными:
+
+  minutesToTime(545)  // 9 ч 5 мин
+  // без padStart: '9:5'
+  // с padStart:   '09:05'
+
+  Без этого результат не прошёл бы проверку TIME_REGEX и не совпал бы с форматом
+  HH:mm из контракта. Есть и парный метод padEnd: он дополняет строку справа.
+
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\shared\lib\time.ts in the IDE. This may or
+  may not be related to the current task.</ide_opened_file>
+
+> так что дальше нам нужно?
+
+● Константы и утилиты времени готовы. Следующий шаг — бизнес-правила брони.
+  Предлагаю положить их в entities/booking/model/rules.ts. Это чистые функции
+  без React и axios, и их будут использовать и yup-схема формы, и mock-сервер на
+  MSW.
+
+  Какие функции нужны:
+  - isOverlapping(a, b) — пересекаются ли два интервала: aStart < bEnd && bStart
+    < aEnd, всё в минутах. Если интервалы только касаются границами, это не
+    пересечение (правило 5).
+  - findConflict(slot, bookings, excludeId?) — находит бронь, с которой
+    пересекается слот. excludeId исключает саму редактируемую бронь, чтобы она
+    не конфликтовала сама с собой (правило 7).
+  - isPastDate(date, now) и isPastTime(date, start, now) — нельзя бронировать
+    прошедшую дату или уже прошедшее время сегодня (правило 6).
+  - validateBooking(slot, { bookings, now, excludeId }) — проверяет всё по
+    порядку и возвращает код ошибки или null:
+    - формат даты и времени;
+    - в пределах рабочего дня (правило 1);
+    - start < end (правило 2);
+    - время кратно 15 минутам;
+    - от 30 минут (правило 3) до 2 часов (правило 4);
+    - не в прошлом (правило 6);
+    - нет пересечений (правило 5).
+  - Тип кодов ошибок (BookingRuleError) и тексты сообщений к ним, общие для
+    формы и сервера.
+
+  После правил по плану:
+  1. Варианты Start/End с шагом 15 минут: прошедшие, занятые и не подходящие по
+     длительности будут недоступны для выбора.
+  2. Mock API на MSW.
+  3. axios-клиент и хуки TanStack Query.
+  4. UI.
+
+  Один вопрос по правилам: если бронь уже прошла или уже идёт сегодня, её можно
+  редактировать и удалять, или только смотреть? От этого зависит, как
+  validateBooking будет проверять прошлое при редактировании.
+
+  Начать с rules.ts?
+
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\entities\booking\config\constants.ts in
+  the IDE. This may or may not be related to the current
+  task.</ide_opened_file>
+
+> да давай саначало с пересечением разберемся ао fsd это в lib должно быть
+  bookinga
+
+● Update(src\entities\booking\index.ts)
+  ⎿  Added 1 line
+      1  export type { Booking, BookingInput, BookingPatch } from './mode
+         l/types'
+      2  export { BOOKING_CONFIG } from './config/constants'
+      3 +export { isOverlapping, findConflict } from './lib/overlap'     
+
+● Добавил проверку пересечений в entities/booking/lib/overlap.ts
+  (src/entities/booking/lib/overlap.ts) и экспортировал обе функции из index.ts
+  (src/entities/booking/index.ts).
+
+  - isOverlapping(a, b) — пересекаются ли два интервала. Сравнивает в минутах:
+    aStart < bEnd && bStart < aEnd. Строгое < нужно, чтобы касание границ не
+    считалось конфликтом (правило 5): у 10:00–11:00 и 11:00–12:00 проверка 660 <
+    660 ложна, значит пересечения нет.
+  - findConflict(slot, bookings, excludeId?) — возвращает первую бронь, которая
+    пересекается со слотом, или undefined. Сравнивает только брони той же даты.
+    excludeId пропускает саму редактируемую бронь, чтобы она не конфликтовала
+    сама с собой (правило 7).
+
+  Сделал findConflict вместе с isOverlapping: это та же тема пересечений. Если
+  хочешь пока только isOverlapping, уберу.
+
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\entities\booking\lib\overlap.ts in the
+  IDE. This may or may not be related to the current task.</ide_opened_file>
+
+> не про конфликт пока не понимаю не надо и тип сделай отедльный не pick,
+  start:string, end:string - не делай оверинженеринг
+
+● Update(src\entities\booking\index.ts)
+  ⎿  Added 1 line, removed 1 line
+      1  export type { Booking, BookingInput, BookingPatch } from './mode
+         l/types'
+      2  export { BOOKING_CONFIG } from './config/constants'
+      3 -export { isOverlapping, findConflict } from './lib/overlap'     
+      3 +export { isOverlapping } from './lib/overlap'                   
+
+  Wrote 1 memory (ctrl+o to expand)
+● Убрал findConflict. В overlap.ts (src/entities/booking/lib/overlap.ts)
+  осталась только isOverlapping с отдельным типом:
+
+  type TimeRange = {
+    start: string
+    end: string
+  }
+
+  export const isOverlapping = (a: TimeRange, b: TimeRange) =>
+    timeToMinutes(a.start) < timeToMinutes(b.end) && timeToMinutes(b.start) <
+  timeToMinutes(a.end)
+
+  Из index.ts (src/entities/booking/index.ts) теперь экспортируется только
+  isOverlapping.
+
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\entities\booking\lib\overlap.ts in the
+  IDE. This may or may not be related to the current task.</ide_opened_file>
+
+> так а расккажи мне про MSW, мне же нужно делать проверку брони функцию я
+  подозреваю, а к серверу там тоже нужно?
+
+● Что такое MSW
+
+  MSW (Mock Service Worker) перехватывает HTTP-запросы прямо в браузере. При
+  запуске приложения регистрируется Service Worker (тот самый
+  public/mockServiceWorker.js). Когда axios отправляет GET
+  /api/bookings?date=..., воркер ловит запрос и отдаёт его твоему обработчику
+  (handler), а обработчик возвращает ответ, как настоящий сервер.
+
+  UI → axios → GET /api/bookings → [Service Worker] → handler в src/mocks →
+  JSON-ответ
+
+  Для UI и axios это обычный сервер: в DevTools во вкладке Network видны
+  настоящие запросы и ответы. Поэтому сетевой слой пишется под реальный API, и
+  потом достаточно просто не запускать MSW.
+
+  Внутри src/mocks обычно три части:
+  - db — хранилище в памяти: массив броней со стартовыми данными, функции
+    добавить, изменить, удалить.
+  - handlers — http.get / post / patch / delete('/api/bookings...'), каждый
+    возвращает HttpResponse.json(...) с нужным статусом.
+  - browser.ts — setupWorker(...handlers); в main.tsx перед рендером вызывается
+    worker.start().
+
+  Да, проверка нужна и на сервере
+
+  По ТЗ сервер сам проверяет бизнес-правила и умеет отвечать 409. Проверка нужна
+  в двух местах, и у каждого своя задача:
+
+  ┌───────────┬──────────────────────────────┬─────────────────────────────┐
+  │           │     Клиент (форма, yup)      │    Сервер (MSW handler)     │
+  ├───────────┼──────────────────────────────┼─────────────────────────────┤
+  │           │ удобство: сразу показать     │ источник истины: клиенту    │
+  │ Зачем     │ ошибку, заблокировать        │ нельзя доверять, данные     │
+  │           │ занятые варианты             │ могли устареть              │
+  ├───────────┼──────────────────────────────┼─────────────────────────────┤
+  │ Видит     │ только те, что были          │ актуальные на момент        │
+  │ брони     │ загружены последними         │ запроса                     │
+  ├───────────┼──────────────────────────────┼─────────────────────────────┤
+  │           │ ошибка у поля, кнопка        │ 422 — нарушено правило, 409 │
+  │ Результат │ неактивна                    │  — пересечение, 404 — брони │
+  │           │                              │  нет                        │
+  └───────────┴──────────────────────────────┴─────────────────────────────┘
+
+  Правило 8 как раз об этом. Клиент проверил слот по своему списку, и слот
+  выглядел свободным. Но пока пользователь заполнял форму, кто-то другой его
+  занял, и сервер отвечает 409. Тогда UI показывает сообщение, перезагружает
+  брони и сохраняет введённые данные.
+
+  Одни функции для обоих
+
+  Поэтому правила и пишутся как чистые функции в entities/booking/lib, без React
+  и axios. Например, isOverlapping будут вызывать:
+  - yup-схема в форме — чтобы показать ошибку;
+  - обработчик POST/PATCH в MSW — перед сохранением: если пересечение есть,
+    вернуть 409.
+
+  Логика одна, и клиент с сервером не разойдутся в правилах. С настоящим
+  бэкендом серверная копия просто уйдёт вместе с MSW.
+
+  Чтобы показать 409 на демо, нужна имитация «другого пользователя». Есть два
+  варианта:
+  - обработчик иногда сам вставляет чужую бронь на этот слот и отвечает 409;
+  - в UI есть переключатель «Simulate conflict».
+
+  Этот выбор ещё за тобой.
+
+> так если сервер сам будет проверять, а я сделаю на клиенте, зачем и на
+  сервере еще мне делать?
+
+● Потому что в этом задании сервер — это и есть твой MSW. Настоящего бэкенда
+  нет, и «сервер сам проверит» случится только если ты сам напишешь эту проверку
+  в обработчике.
+
+  Проверка только на клиенте не спасает по трём причинам:
+
+  1. Устаревшие данные. Клиент проверяет по списку броней, загруженному какое-то
+     время назад. Пример:
+     - в 10:00 ты открыл форму, слот 12:00–13:00 свободен;
+     - в 10:01 коллега забронировал 12:00–13:00;
+     - в 10:02 ты нажимаешь «Create» — клиентская проверка проходит, данные-то
+       старые.
+
+     Поймать это может только сервер: у него актуальный список. Это ровно
+     правило 8 из ТЗ.
+  2. Клиент можно обойти. Запрос можно отправить через curl, Postman или
+     поправить в DevTools. Сервер не должен доверять тому, что пришло с клиента.
+  3. Это требование ТЗ. «Сервер валидирует бизнес-правила и умеет возвращать
+     конфликт (409)». И отдельно оценивается обработка серверных ошибок. Если
+     сервер ничего не проверяет, 409 взяться неоткуда, и показать его обработку
+     не получится.
+
+  Так что роли разные:
+  - клиент нужен для удобства: ошибка видна сразу, занятые варианты недоступны,
+    лишних запросов нет;
+  - сервер даёт гарантию: в базу не попадёт пересекающаяся бронь.
+
+  По объёму работы это почти ничего не добавляет. Функции общие (isOverlapping и
+  следующие), так что в обработчике это несколько строк: проверил, при
+  нарушении вернул 409 или 422.
+
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\main.tsx in the IDE. This may or may not
+  be related to the current task.</ide_opened_file>
+
+> получается ты хочешь чтобы создалась одна функция которая будет для клиента и
+  для сервера, а какие проверки там нужны и тд?
+
+● Да, одна функция. Она получает данные брони и контекст, а возвращает первую
+  найденную ошибку или null. Клиент и сервер вызывают её одинаково, отличаются
+  только списком броней, который ей передают.
+
+  validateBooking(
+    { date, start, end },
+    { bookings, now, excludeId },
+  )
+  // → 'too-short' | 'overlap' | ... | null
+
+  - bookings — с чем сравнивать на пересечение. Клиент передаёт загруженный
+    список, сервер — свою базу в памяти.
+  - now — текущее время, нужно для проверки «не в прошлом».
+  - excludeId — id редактируемой брони, чтобы она не конфликтовала сама с собой.
+
+  Какие проверки внутри, по порядку
+
+  ┌─────┬─────────────────────────────────┬─────────────────────┬───────────┐
+  │  #  │            Проверка             │    Пример ошибки    │ Правило   │
+  │     │                                 │                     │    ТЗ     │
+  ├─────┼─────────────────────────────────┼─────────────────────┼───────────┤
+  │     │ Формат: date — существующая     │ '25:00',            │           │
+  │ 1   │ дата YYYY-MM-DD, start/end —    │ '2026-02-30'        │ контракт  │
+  │     │ HH:mm                           │                     │           │
+  ├─────┼─────────────────────────────────┼─────────────────────┼───────────┤
+  │ 2   │ Внутри рабочего дня: start ≥    │ 08:30–09:30         │ 1         │
+  │     │ 09:00, end ≤ 18:00              │                     │           │
+  ├─────┼─────────────────────────────────┼─────────────────────┼───────────┤
+  │ 3   │ start < end                     │ 12:00–11:00         │ 2         │
+  ├─────┼─────────────────────────────────┼─────────────────────┼───────────┤
+  │ 4   │ Кратно шагу 15 минут            │ 10:10–10:40         │ наше      │
+  │     │                                 │                     │ решение   │
+  ├─────┼─────────────────────────────────┼─────────────────────┼───────────┤
+  │ 5   │ Длительность ≥ 30 мин           │ 10:00–10:15         │ 3         │
+  ├─────┼─────────────────────────────────┼─────────────────────┼───────────┤
+  │ 6   │ Длительность ≤ 2 ч              │ 10:00–12:30         │ 4         │
+  ├─────┼─────────────────────────────────┼─────────────────────┼───────────┤
+  │ 7   │ Дата не в прошлом               │ вчера               │ 6         │
+  ├─────┼─────────────────────────────────┼─────────────────────┼───────────┤
+  │ 8   │ Сегодня: start не раньше        │ сейчас 14:20,       │ 6         │
+  │     │ текущего времени                │ начало в 14:00      │           │
+  ├─────┼─────────────────────────────────┼─────────────────────┼───────────┤
+  │     │ Нет пересечений с другими       │ 10:30–11:30 при     │           │
+  │ 9   │ бронями той же даты (без своей) │ существующей        │ 5, 7      │
+  │     │  — через isOverlapping          │ 10:00–11:00         │           │
+  └─────┴─────────────────────────────────┴─────────────────────┴───────────┘
+
+  Порядок выбран так: сначала дешёвые проверки, которые не зависят от других
+  броней, пересечение — в самом конце. Возвращается первая найденная ошибка,
+  поэтому у пользователя всегда одно понятное сообщение.
+
+  Как её используют клиент и сервер
+
+  Клиент (форма): yup-схема вызывает validateBooking и показывает ошибку под
+  полем. Кнопка «Create» не отправит невалидные данные. Те же правила потом
+  используем, чтобы в списках Start/End недоступные варианты были неактивны.
+
+  Сервер (MSW): на POST и PATCH обработчик вызывает ту же функцию с актуальной
+  базой.
+  - Ошибка overlap → ответ 409 Conflict. Это ситуация из правила 8.
+  - Любая другая ошибка → 422 с кодом ошибки.
+  - Ошибок нет → сохраняет бронь и отвечает 201 или 200.
+
+  Что ещё не решено
+
+  - Сообщения для кодов ошибок. Можно хранить их рядом с функцией, тогда клиент
+    и сервер покажут одинаковый текст.
+  - Редактирование прошедших броней. Если бронь уже прошла или идёт сейчас,
+    проверка 8 не даст её сохранить. Нужно решить: такие брони только для
+    просмотра, или при редактировании проверка прошлого не применяется.
+
+  С какой проверки начнём?
+
+> напиши эту функцию я посмотрю, и разбор ее сразу же в чате дай
+
+● Update(src\entities\booking\index.ts)
+  ⎿  Added 2 lines
+      1  export type { Booking, BookingInput, BookingPatch } from './mode
+         l/types'
+      2  export { BOOKING_CONFIG } from './config/constants'
+      3  export { isOverlapping } from './lib/overlap'
+      4 +export { validateBooking } from './lib/validateBooking'         
+      5 +export type { BookingValidationError } from './lib/validateBooki
+        +ng'                                                             
+
+● Написал функцию в entities/booking/lib/validateBooking.ts
+  (src/entities/booking/lib/validateBooking.ts) и экспортировал её вместе с
+  типом ошибки из index.ts (src/entities/booking/index.ts). Ниже разбор по
+  частям.
+
+  1. Тип ошибки
+
+  export type BookingValidationError = 'invalid-format' | 'outside-working-day'
+  | ... | 'overlap'
+  Функция возвращает код ошибки, а не текст. Клиент по коду покажет нужное
+  сообщение, сервер по коду выберет статус: overlap → 409, остальное → 422. Если
+  ошибок нет, функция возвращает null.
+
+  2. Входные типы
+
+  type BookingSlot = { date: string; start: string; end: string }
+  type ValidationContext = { bookings: Booking[]; now: Dayjs; excludeId?: string
+  }
+  - slot — что проверяем: для одной проверки достаточно трёх полей, title не
+    нужен.
+  - bookings — с чем сравнивать на пересечение. Клиент передаёт загруженный
+    список, сервер — свою базу.
+  - now приходит параметром, а не вычисляется внутри через dayjs(). Так функция
+    чистая: в тестах можно подставить любое «сейчас», например 14:20.
+  - excludeId — id редактируемой брони.
+
+  3. Формат
+
+  if (!isValidDate(slot.date) || !isValidTime(slot.start) ||
+  !isValidTime(slot.end)) return 'invalid-format'
+  Эта проверка идёт первой: дальше строки переводятся в минуты, а
+  timeToMinutes('abc') дал бы NaN. На клиенте она почти не сработает, потому что
+  значения берутся из Select. Она нужна серверу, куда может прийти что угодно.
+
+  4. Перевод в минуты
+
+  const start = timeToMinutes(slot.start)   // '10:30' → 630
+  const end = timeToMinutes(slot.end)
+  const duration = end - start
+  Дальше все сравнения идут в числах, а не строками.
+
+  5. Рабочий день (правило 1)
+
+  if (start < dayStart || end > dayEnd) return 'outside-working-day'
+  Границы входят: 09:00–09:30 и 17:30–18:00 допустимы.
+
+  6. start < end (правило 2)
+
+  if (start >= end) return 'start-not-before-end'
+  Знак >= нужен, чтобы бронь нулевой длины (10:00–10:00) тоже была ошибкой.
+
+  7. Шаг 15 минут
+
+  if (start % step !== 0 || end % step !== 0) return 'not-aligned-to-step'
+  630 % 15 = 0 (10:30) — ок, 640 % 15 = 10 (10:40) — ошибка. Проверять время от
+  полуночи можно, потому что 09:00 = 540 тоже делится на 15.
+
+  8. Длительность (правила 3 и 4)
+
+  if (duration < 30) return 'too-short'
+  if (duration > 120) return 'too-long'
+  Ровно 30 минут и ровно 2 часа допустимы. Обе проверки стоят после start < end,
+  поэтому duration здесь всегда положительный.
+
+  9. Прошлое (правило 6)
+
+  const date = dayjs(slot.date)
+  if (date.isBefore(now, 'day')) return 'past-date'
+  if (date.isSame(now, 'day') && start < nowMinutes) return 'past-time'
+  - Аргумент 'day' говорит dayjs сравнивать только даты, без времени.
+  - Прошедшая дата → past-date.
+  - Если дата сегодняшняя, начало сравнивается с текущим временем в минутах.
+    Сейчас 14:20 (= 860): начало в 14:15 — ошибка, в 14:30 — ок.
+
+  10. Пересечения (правила 5 и 7)
+
+  const hasOverlap = bookings.some(
+    (booking) => booking.id !== excludeId && booking.date === slot.date &&
+  isOverlapping(slot, booking),
+  )
+  Бронь — конфликт, если выполнены все три условия:
+  - это не та бронь, которую редактируем (excludeId, правило 7);
+  - она на ту же дату — на сервере в базе брони всех дней;
+  - интервалы пересекаются; касание границ конфликтом не считается (правило 5).
+
+  Пересечение проверяется последним: это единственная проверка, которая зависит
+  от других броней.
+
+  Что стоит учесть
+
+  1. Сначала ошибки формы, потом пересечение. Порядок такой специально: если
+     ввод сам по себе неверный (например, 20 минут), пользователь увидит это
+     раньше, чем конфликт.
+  2. Редактирование уже начавшейся брони. Бронь 14:00–15:00, сейчас 14:20,
+     меняем название — функция вернёт past-time. Пока такие брони нельзя
+     сохранить. Нужно решить: либо они только для просмотра (тогда всё уже
+     правильно), либо при редактировании проверку прошлого ослабляем.
+  3. Текстов ошибок пока нет, только коды. Когда дойдём до формы, нужна будет
+     карта «код → сообщение».
+
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\entities\booking\lib\validateBooking.ts in
+  the IDE. This may or may not be related to the current
+  task.</ide_opened_file>
+
+> во перавых ерор в верхнем регистре, потом мы можем в начале сделать const
+  {date,start, end} = slot, и так же с правилами const {workStart, workEnd} =
+  Booking rules, это более понятный формат и проверки же обьектом надо нет
+  возвщать нет code: ' ' , field: ' ' , message: ''
+
+● Update(src\entities\booking\index.ts)
+  ⎿  Added 1 line, removed 1 line
+      2  export { BOOKING_CONFIG } from './config/constants'
+      3  export { isOverlapping } from './lib/overlap'
+      4  export { validateBooking } from './lib/validateBooking'
+      5 -export type { BookingValidationError } from './lib/validateBooki
+        -ng'                                                             
+      5 +export type { BookingValidationCode, BookingValidationError } fr
+        +om './lib/validateBooking'                                      
+
+● Переписал validateBooking.ts (src/entities/booking/lib/validateBooking.ts) по
+  твоим трём замечаниям. В index.ts (src/entities/booking/index.ts) добавил
+  экспорт нового типа BookingValidationCode. Сборку и линтер не запускал.
+
+  Что поменялось
+
+  1. Коды ошибок — в верхнем регистре:
+  'INVALID_FORMAT' | 'OUTSIDE_WORKING_DAY' | 'START_NOT_BEFORE_END' |
+  'NOT_ALIGNED_TO_STEP'
+  | 'TOO_SHORT' | 'TOO_LONG' | 'PAST_DATE' | 'PAST_TIME' | 'OVERLAP'
+
+  2. Деструктуризация в начале функции:
+  const { date, start, end } = slot
+  const { workingDayStart, workingDayEnd, timeStepMinutes, minDurationMinutes,
+  maxDurationMinutes } = BOOKING_CONFIG
+  Имена оставил такими, как в BOOKING_CONFIG. В сообщении ты написал
+  workStart/workEnd и «Booking rules». Если хочешь, переименую поля и саму
+  константу (например, в BOOKING_RULES).
+
+  3. Ошибка — объект:
+  type BookingValidationError = {
+    code: BookingValidationCode
+    field: 'date' | 'start' | 'end'
+    message: string
+  }
+  Чтобы у каждой ошибки было точное поле, общие проверки разделил по полям:
+
+  ┌───────────────────────────────┬──────────────────────┬──────────────────┐
+  │           Проверка            │         code         │      field       │
+  ├───────────────────────────────┼──────────────────────┼──────────────────┤
+  │ Формат даты, начала, конца    │ INVALID_FORMAT       │ date / start /   │
+  │                               │                      │ end              │
+  ├───────────────────────────────┼──────────────────────┼──────────────────┤
+  │ Начало раньше 09:00           │ OUTSIDE_WORKING_DAY  │ start            │
+  ├───────────────────────────────┼──────────────────────┼──────────────────┤
+  │ Конец позже 18:00             │ OUTSIDE_WORKING_DAY  │ end              │
+  ├───────────────────────────────┼──────────────────────┼──────────────────┤
+  │ start >= end                  │ START_NOT_BEFORE_END │ end              │
+  ├───────────────────────────────┼──────────────────────┼──────────────────┤
+  │ Начало или конец не кратны 15 │ NOT_ALIGNED_TO_STEP  │ start / end      │
+  │  мин                          │                      │                  │
+  ├───────────────────────────────┼──────────────────────┼──────────────────┤
+  │ Меньше 30 мин или больше 2 ч  │ TOO_SHORT / TOO_LONG │ end              │
+  ├───────────────────────────────┼──────────────────────┼──────────────────┤
+  │ Прошедшая дата                │ PAST_DATE            │ date             │
+  ├───────────────────────────────┼──────────────────────┼──────────────────┤
+  │ Начало сегодня уже прошло     │ PAST_TIME            │ start            │
+  ├───────────────────────────────┼──────────────────────┼──────────────────┤
+  │ Пересечение                   │ OVERLAP              │ start            │
+  └───────────────────────────────┴──────────────────────┴──────────────────┘
+
+  Логика самих проверок и их порядок не изменились. Внутри функции переменные
+  теперь называются startMinutes и endMinutes, чтобы не путать их со строками
+  start и end из деструктуризации.
+
+  Для чего каждое поле
+
+  - code — для логики. Сервер по нему выбирает статус: OVERLAP → 409, остальное
+    → 422.
+  - field — форма через setError(field, { message }) подсвечивает нужный Select.
+  - message — готовый текст для пользователя, одинаковый на клиенте и сервере.
+
+  Что стоит проверить
+
+  - field для OVERLAP я назначил на start. Конфликт относится ко всему
+    интервалу, поэтому можно привязать его к end или показывать общим алертом
+    над кнопками, как на твоём скрине.
+  - Длительность. Проверки длительности привязаны к end: обычно пользователь
+    меняет именно конец.
+
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\entities\booking\lib\validateBooking.ts in
+  the IDE. This may or may not be related to the current
+  task.</ide_opened_file>
+
+> ну для mcw на сервере они пойдойдут а на клиенте их сможем тоже использовать?
+
+● Да, функция подходит и для клиента. Она чистая: не знает про React, axios и
+  MSW, на вход получает данные и контекст, на выходе — объект ошибки или null.
+  Поэтому её можно вызывать где угодно.
+
+  Как подключить к форме
+
+  Форма на RHF + yup. В yup-схеме делаем один общий .test(), который вызывает
+  validateBooking и отдаёт ошибку на нужное поле через field:
+
+  const bookingFormSchema = yup.object({
+    title: yup.string().max(100),
+    date: yup.string().required(),
+    start: yup.string().required('Select start time'),
+    end: yup.string().required('Select end time'),
+  }).test('booking-rules', '', function (values) {
+    const { bookings, excludeId } = this.options.context ?? {}
+    const error = validateBooking(values, { bookings, now: dayjs(), excludeId })
+    if (!error) return true
+    return this.createError({ path: error.field, message: error.message })
+  })
+
+  - path: error.field — ошибка подсветит нужный Select (start, end или date).
+    Для этого мы и добавили field.
+  - message — готовый текст под полем.
+  - bookings и excludeId нужны схеме, но в самой форме их нет. Их передаём через
+    контекст RHF: useForm({ resolver: yupResolver(schema), context: { bookings,
+    excludeId } }). Брони берём из уже загруженного TanStack Query списка.
+
+  Чем отличается от сервера
+
+  ┌──────────────────┬───────────────────────────┬──────────────────────────┐
+  │                  │          Клиент           │       Сервер (MSW)       │
+  ├──────────────────┼───────────────────────────┼──────────────────────────┤
+  │ bookings         │ загруженный список на     │ вся база в памяти        │
+  │                  │ выбранную дату            │                          │
+  ├──────────────────┼───────────────────────────┼──────────────────────────┤
+  │ now              │ dayjs() в браузере        │ dayjs() в обработчике    │
+  ├──────────────────┼───────────────────────────┼──────────────────────────┤
+  │ Что делаем с     │ показываем под полем,     │ OVERLAP → 409, остальное │
+  │ ошибкой          │ запрос не отправляем      │  → 422                   │
+  ├──────────────────┼───────────────────────────┼──────────────────────────┤
+  │ INVALID_FORMAT   │ почти не сработает,       │ важно: в запросе может   │
+  │                  │ значения из Select        │ прийти что угодно        │
+  └──────────────────┴───────────────────────────┴──────────────────────────┘
+
+  Если клиент пропустил бронь, а сервер вернул OVERLAP, это правило 8: данные на
+  клиенте устарели. Обработаем это отдельно: алерт, перезапрос списка,
+  введённые данные остаются в форме.
+
+  Ещё одно применение на клиенте
+
+  Эту же функцию можно использовать, чтобы недоступные варианты в Select были
+  неактивны. Для каждого варианта Start вызываем validateBooking с этим временем
+  и минимальной длительностью. Если вернулась ошибка, вариант неактивен. Так
+  правила будут описаны в одном месте, без отдельной логики для UI.
+
+  Одна оговорка: в yup-схеме функция возвращает только первую ошибку, поэтому за
+  раз подсвечивается одно поле. Здесь это нормально: проверки зависят друг от
+  друга, и следующая имеет смысл, только когда исправлена предыдущая.
+
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\entities\booking\lib\validateBooking.ts in
+  the IDE. This may or may not be related to the current
+  task.</ide_opened_file>
+
+> да теперь мне нравиться, что у нас дальше по плану я так понимаю msw мокать
+  надо, но я хз что там бд, запросы как это делается
+
+  Searched for 2 patterns, ran 4 shell commands (ctrl+o to expand)
+
+● Сверился с установленной версией MSW: у нас 3.0.3, и в ней есть привычные
+  http, HttpResponse, delay, setupWorker из msw/browser. Примеры ниже — под эту
+  версию. Объясню, как устроен mock-сервер.
+
+  Из чего состоит mock-сервер
+
+  Это три небольших файла в src/mocks:
+
+  mocks/
+    db.ts        «база данных» — просто массив в памяти
+    handlers.ts  «роуты сервера» — что отвечать на каждый запрос
+    browser.ts   запуск воркера
+
+  1. db.ts — «БД»
+
+  Настоящей базы нет. Это обычный массив броней и несколько функций для работы с
+  ним:
+
+  let bookings: Booking[] = [
+    { id: '1', date: '2026-10-29', start: '10:00', end: '11:00', title: 'Daily
+  standup' },
+  ]
+
+  export const db = {
+    getByDate: (date: string) => bookings.filter((b) => b.date === date),
+    getAll: () => bookings,
+    findById: (id: string) => bookings.find((b) => b.id === id),
+    create: (input: BookingInput) => { const booking = { id:
+  crypto.randomUUID(), ...input }; bookings.push(booking); return booking },
+    update: (id: string, patch: BookingPatch) => { ... },
+    remove: (id: string) => { bookings = bookings.filter((b) => b.id !== id) },
+  }
+
+  Данные живут, пока открыта вкладка. После перезагрузки страницы массив снова
+  становится начальным. При желании можно сохранять его в localStorage.
+  Стартовые брони лучше ставить на сегодня и завтра через dayjs(): с
+  фиксированными датами в демо через неделю будет пусто.
+
+  2. handlers.ts — «роуты»
+
+  По одному обработчику на каждый запрос из контракта. По сути это мини-Express:
+
+  export const handlers = [
+    http.get('/api/bookings', async ({ request }) => {
+      await delay(500)
+      const date = new URL(request.url).searchParams.get('date')
+      if (!date) return HttpResponse.json({ message: 'date is required' }, {
+  status: 400 })
+      return HttpResponse.json(db.getByDate(date))
+    }),
+
+    http.post('/api/bookings', async ({ request }) => {
+      await delay(500)
+      const input = (await request.json()) as BookingInput
+      const error = validateBooking(input, { bookings: db.getAll(), now: dayjs()
+  })
+      if (error) {
+        const status = error.code === 'OVERLAP' ? 409 : 422
+        return HttpResponse.json(error, { status })
+      }
+      return HttpResponse.json(db.create(input), { status: 201 })
+    }),
+
+    http.patch('/api/bookings/:id', ...),
+    http.delete('/api/bookings/:id', ...),
+  ]
+
+  В каждом обработчике:
+  - request — входящий запрос: request.json() для тела, new URL(request.url) для
+    query-параметров;
+  - params.id — параметр из пути :id;
+  - HttpResponse.json(data, { status }) — ответ с нужным статусом;
+  - delay(500) — задержка, чтобы в UI были видны лоадеры.
+
+  Сюда и подключается наш validateBooking. Он уже возвращает { code, field,
+  message }, поэтому этот объект можно сразу отдать в теле ответа.
+
+  ┌─────────────┬──────────────┬───────────────────────────────────────────┐
+  │   Запрос    │    Успех     │                  Ошибки                   │
+  ├─────────────┼──────────────┼───────────────────────────────────────────┤
+  │ GET ?date=  │ 200 + массив │ 400 — нет даты                            │
+  ├─────────────┼──────────────┼───────────────────────────────────────────┤
+  │ POST        │ 201 + бронь  │ 422 — правило, 409 — OVERLAP              │
+  ├─────────────┼──────────────┼───────────────────────────────────────────┤
+  │ PATCH /:id  │ 200 + бронь  │ 404 — нет брони, 422, 409 (excludeId: id) │
+  ├─────────────┼──────────────┼───────────────────────────────────────────┤
+  │ DELETE /:id │ 204          │ 404                                       │
+  └─────────────┴──────────────┴───────────────────────────────────────────┘
+
+  В PATCH приходят только изменённые поля, поэтому для проверки их надо
+  объединить с текущей бронью: { ...existing, ...patch }.
+
+  3. browser.ts + запуск
+
+  export const worker = setupWorker(...handlers)
+  В main.tsx перед рендером:
+  await worker.start({ onUnhandledRequest: 'bypass' })
+  createRoot(...).render(<App />)
+  Ждём запуска воркера, иначе первый GET уйдёт раньше, чем MSW начнёт
+  перехватывать. bypass пропускает все остальные запросы (шрифты, ассеты) без
+  предупреждений.
+
+  Как это выглядит при работе
+
+  axios.post('/api/bookings', data)
+     → браузер отправляет запрос
+     → Service Worker перехватывает его
+     → MSW находит подходящий handler
+     → validateBooking → db.create
+     → ответ 201 / 409 / 422 приходит в axios как от настоящего сервера
+
+  В DevTools во вкладке Network запросы видны как обычные, а в консоли MSW пишет
+  [MSW] Mocking enabled.
+
+  Предлагаю делать по порядку
+
+  1. db.ts — массив со стартовыми бронями и функции CRUD.
+  2. handlers.ts — четыре обработчика с validateBooking.
+  3. browser.ts + запуск в main.tsx.
+  4. Имитация «чужой» брони для 409 (правило 8). Это потом, когда будет UI.
+
+  Начать с db.ts?
+
+> и получается потом если нужно убрать это мы просто подставим нужно api и  все
+  будет работать?
+
+● Да, если сетевой слой отделён от UI. MSW не трогает код приложения: он только
+  перехватывает запросы в браузере. Axios отправляет обычные запросы и не знает,
+  кто на них отвечает.
+
+  Что нужно, чтобы замена была «в одну строку»
+
+  1. Запуск MSW — по флагу из env:
+  if (import.meta.env.VITE_API_MOCKING === 'true') {
+    const { worker } = await import('@/mocks/browser')
+    await worker.start({ onUnhandledRequest: 'bypass' })
+  }
+  Флаг выключен — воркер не стартует, и запросы уходят в сеть. Динамический
+  import нужен, чтобы при выключенном флаге код моков не загружался в браузер.
+
+  2. Адрес API — тоже из env:
+  export const http = axios.create({ baseURL: import.meta.env.VITE_API_URL ?? ''
+  })
+  - Сейчас baseURL пустой, запросы идут на /api/bookings, их ловит MSW.
+  - С бэкендом ставишь VITE_API_URL=https://api.company.com, и те же запросы
+    уходят на сервер.
+
+  3. UI не знает про axios напрямую. Компоненты ходят только через хуки
+  (useBookings, useCreateBooking), хуки — через bookingApi, и только bookingApi
+  — через axios:
+  UI → хуки TanStack Query → bookingApi → axios → MSW или реальный сервер
+  Даже если бэкенд окажется другим (GraphQL, другие пути), правится один
+  bookingApi, а хуки и компоненты остаются прежними.
+
+  Что должно совпасть с реальным бэкендом
+
+  Иначе даже при правильной архитектуре что-то перестанет работать:
+  - пути и методы из контракта ТЗ;
+  - статусы: 201 / 204 / 404 / 409 / 422 — UI на них опирается, особенно на 409;
+  - формат ошибки { code, field, message }. Если у бэкенда он другой, перевести
+    его в наш формат можно в одном месте — в interceptor axios, UI при этом не
+    меняется;
+  - инфраструктура: CORS и авторизацию (в ТЗ не нужна) настраивают уже под
+    реальный сервер.
+
+  Что остаётся при переезде
+
+  - validateBooking на клиенте никуда не уходит: она нужна для удобства формы.
+    Проверку на сервере реальный бэкенд делает сам, на своём языке.
+  - Папка mocks удаляется или остаётся для разработки и тестов. MSW часто так и
+    используют: разрабатывают фронт, пока бэкенд не готов.
+
+  На собеседовании это стоит упомянуть в README: «сетевой слой отделён, MSW
+  включается по флагу VITE_API_MOCKING, для реального API достаточно выключить
+  флаг и указать VITE_API_URL».
+
+  Начинаем с db.ts?
+
+> настрой тогда, мне впринципе в это вникать не обязательно, только
+  архитектурно где ее положить mocks? но такого слоя нету, после того как
+  сделать основные сущности мне расскажи
+
+● Настраиваю MSW: хранилище в памяти, обработчики, запуск по флагу. Папку кладу
+  в src/mocks, вне слоёв FSD — почему так, объясню в конце.
+
+● Write(src\mocks\db.ts)
+  ⎿  Wrote 47 lines to src\mocks\db.ts
+       1 import dayjs from 'dayjs'
+       2 import type { Booking, BookingInput, BookingPatch } from '@/enti
+         ties/booking'
+       3 import { DATE_FORMAT } from '@/shared/lib/time'
+       4
+       5 const today = dayjs().format(DATE_FORMAT)
+       6 const tomorrow = dayjs().add(1, 'day').format(DATE_FORMAT)
+       7 const yesterday = dayjs().subtract(1, 'day').format(DATE_FORMAT)
+       8
+       9 let bookings: Booking[] = [
+     … +38 lines (ctrl+o to expand)
+
+● Write(src\mocks\handlers.ts)
+  ⎿  Wrote 64 lines to src\mocks\handlers.ts
+       1 import dayjs from 'dayjs'
+       2 import { delay, http, HttpResponse } from 'msw'
+       3 import { validateBooking } from '@/entities/booking'
+       4 import type { BookingInput, BookingPatch, BookingValidationError
+          } from '@/entities/booking'
+       5 import { db } from './db'
+       6
+       7 const BOOKINGS_URL = '/api/bookings'
+       8
+       9 const validationErrorResponse = (error: BookingValidationError)
+     … +56 lines (~2 KB) (ctrl+o to expand)
+
+● Write(.env)
+  ⎿  Wrote 1 line to .env
+      1 VITE_API_MOCKING=true
+
+● MSW настроен, и запросы к /api/bookings теперь обрабатывает мок. Я его не
+  запускал и сборку не проверял: tsc и eslint не трогаю, как договаривались.
+
+  Что сделал
+
+  Файл: src/mocks/db.ts
+  Что внутри: Массив броней в памяти. Стартовые брони на вчера, сегодня и завтра
+
+  считаются от текущей даты через dayjs, поэтому демо не устареет. Функции:
+  getAll, getByDate, findById, create, update, remove.
+  ────────────────────────────────────────
+  Файл: src/mocks/handlers.ts
+  Что внутри: Четыре запроса из контракта. POST и PATCH проверяют данные через
+  наш validateBooking.
+  ────────────────────────────────────────
+  Файл: src/mocks/browser.ts
+  Что внутри: setupWorker(...handlers)
+  ────────────────────────────────────────
+  Файл: src/main.tsx
+  Что внутри: Если VITE_API_MOCKING=true, сначала запускается воркер, потом
+  рендерится App. Код моков загружается динамическим импортом.
+  ────────────────────────────────────────
+  Файл: .env
+  Что внутри: VITE_API_MOCKING=true
+  ────────────────────────────────────────
+  Файл: src/vite-env.d.ts
+  Что внутри: Тип переменной окружения для import.meta.env
+
+  Ответы сервера:
+  - GET ?date= — 200 с бронями этой даты, отсортированными по началу. Если даты
+    нет — 400.
+  - POST — 201 с созданной бронью. Если validateBooking вернул OVERLAP — 409,
+    при других ошибках — 422. В теле ответа тот же объект { code, field, message
+    }.
+  - PATCH /:id — 404, если брони нет. Иначе текущая бронь объединяется с
+    изменёнными полями и проверяется с excludeId, чтобы не конфликтовать сама с
+    собой. При успехе — 200.
+  - DELETE /:id — 204, если брони нет — 404.
+  - У каждого запроса есть небольшая задержка (delay()), чтобы в UI были видны
+    состояния загрузки.
+
+  Где лежат моки по FSD
+
+  В FSD нет отдельного слоя для моков. Это нормально, потому что моки — не часть
+  приложения, а его окружение, как тесты или конфиги. Поэтому src/mocks лежит
+  рядом со слоями, а не внутри них:
+
+  src/
+    app/ pages/ widgets/ features/ entities/ shared/   ← приложение (FSD)
+    mocks/                                             ← инфраструктура, вне
+  слоёв
+    main.tsx
+
+  Почему не внутри слоёв:
+  - shared не подходит. Моки используют validateBooking и типы из
+    entities/booking. А по правилам FSD shared — нижний слой и не может
+    импортировать из entities.
+  - app нарушил бы разделение. Технически app может импортировать что угодно, но
+    тогда моки станут частью приложения. Мы же хотим, чтобы их можно было
+    отключить или удалить без последствий.
+  - Импортирует их только main.tsx, и только динамически по флагу. Ни один слой
+    приложения не знает о моках. Поэтому при переходе на реальный API достаточно
+    выставить VITE_API_MOCKING=false или удалить папку.
+
+  Учти при деплое
+
+  .env нужно закоммитить, иначе на Vercel моки не включатся. Шаблонный
+  .gitignore игнорирует только *.local, так что файл в репозиторий попадёт. В
+  нём нет секретов, только флаг.
+
+  Как появятся основные сущности (axios-клиент и хуки TanStack Query), расскажу,
+  как всё связано целиком. Следующий шаг — shared/api с axios-инстансом и
+  bookingApi в entities/booking/api.
+
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\mocks\browser.ts in the IDE. This may or
+  may not be related to the current task.</ide_opened_file>
+
+> окей, проверь сам сейчас отрабатывает ли это, сделай запрос у себя
+
+● Воркер MSW работает только в браузере, а браузера у меня нет. Поэтому проверю
+  те же самые обработчики через msw/node (setupServer). Логика та же: те же
+  handlers, тот же db, тот же validateBooking. Создам временный тест и удалю его
+  после прогона.
+
+● Write(src\mocks\__check__.test.ts)  ⎿  Wrote 51 lines to src\mocks\__check__.test.ts
+       1 import dayjs from 'dayjs'
+       2 import { setupServer } from 'msw/node'
+       3 import { afterAll, beforeAll, expect, test } from 'vitest'
+       4 import { handlers } from './handlers'
+       5
+       6 const server = setupServer(...handlers)
+       7 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }))
+       8 afterAll(() => server.close())
+       9
+      10 const BASE = 'http://localhost/api/bookings'
+     … +41 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Как и ожидалось, обработчик не сработал в Node — путь /api/bookings
+  относительный, и без location (как в браузере) запрос не совпадает. Добавлю
+  имитацию location в тесте, не трогая сами обработчики.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Я вижу — ошибка в тесте, а не в коде: соседство брони 14:00–15:30 с переносом
+  на 15:30–17:00 по правилу 5 не считается конфликтом, поэтому сервер верно
+  вернул 200. Исправляю время в тесте на 15:00, чтобы получить реальное
+  пересечение.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Все проверки прошли. Удаляю временный тест.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Мок-API работает: все 18 запросов отработали правильно. Проверял через
+  msw/node в vitest: обработчики, db и validateBooking те же, что и в
+  приложении. Временный тест я удалил.
+
+  ┌──────────────────────────────────┬──────────────────────────────────────┐
+  │              Запрос              │                Ответ                 │
+  ├──────────────────────────────────┼──────────────────────────────────────┤
+  │ GET ?date=сегодня                │ 200, 3 брони из стартовых данных, по │
+  │                                  │  порядку                             │
+  ├──────────────────────────────────┼──────────────────────────────────────┤
+  │ GET без date                     │ 400 BAD_REQUEST                      │
+  ├──────────────────────────────────┼──────────────────────────────────────┤
+  │ POST завтра 16:00–17:00          │ 201 со сгенерированным id            │
+  ├──────────────────────────────────┼──────────────────────────────────────┤
+  │ POST 16:30–17:30 (пересечение)   │ 409 OVERLAP                          │
+  ├──────────────────────────────────┼──────────────────────────────────────┤
+  │ POST 17:00–17:30 (касание        │ 201 — правило 5 работает             │
+  │ границы)                         │                                      │
+  ├──────────────────────────────────┼──────────────────────────────────────┤
+  │ POST 11:00–13:30                 │ 422 TOO_LONG                         │
+  ├──────────────────────────────────┼──────────────────────────────────────┤
+  │ POST 11:00–11:15                 │ 422 TOO_SHORT                        │
+  ├──────────────────────────────────┼──────────────────────────────────────┤
+  │ POST 08:30–09:30                 │ 422 OUTSIDE_WORKING_DAY              │
+  ├──────────────────────────────────┼──────────────────────────────────────┤
+  │ POST 11:10–11:40                 │ 422 NOT_ALIGNED_TO_STEP              │
+  ├──────────────────────────────────┼──────────────────────────────────────┤
+  │ POST на вчера                    │ 422 PAST_DATE                        │
+  ├──────────────────────────────────┼──────────────────────────────────────┤
+  │ POST на 2026-02-30               │ 422 INVALID_FORMAT                   │
+  ├──────────────────────────────────┼──────────────────────────────────────┤
+  │ PATCH только title               │ 200 — бронь не конфликтует сама с    │
+  │                                  │ собой (правило 7)                    │
+  ├──────────────────────────────────┼──────────────────────────────────────┤
+  │ PATCH start: 15:30 (касание      │ 200                                  │
+  │ брони 14:00–15:30)               │                                      │
+  ├──────────────────────────────────┼──────────────────────────────────────┤
+  │ PATCH start: 15:00 (пересечение) │ 409                                  │
+  ├──────────────────────────────────┼──────────────────────────────────────┤
+  │ PATCH несуществующего id         │ 404                                  │
+  ├──────────────────────────────────┼──────────────────────────────────────┤
+  │ DELETE                           │ 204, повторный DELETE → 404          │
+  └──────────────────────────────────┴──────────────────────────────────────┘
+
+  Ошибки приходят в формате { code, field, message }, например:
+  409 {"code":"OVERLAP","field":"start","message":"This time overlaps with
+  another booking"}
+
+  Один раз тест упал из-за моей ошибки в ожидании. Перенос на 15:30 только
+  касается брони 14:00–15:30, и сервер правильно ответил 200. Я ждал 409 — тест
+  исправил, код не трогал.
+
+  Не проверял сам Service Worker в браузере: запуск worker.start() и
+  mockServiceWorker.js. Браузера у меня нет. Проверить можно так: npm run dev,
+  открыть страницу — в консоли должно появиться [MSW] Mocking enabled. Запросы
+  будут видны во вкладке Network, когда подключим axios и хуки.
+
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\app\App.tsx in the IDE. This may or may
+  not be related to the current task.</ide_opened_file>
+
+> так теперь правила описаны модно переходить к слою Api,  что нам нужно
+  запросы, а и отделить же ui как в требованиях, настроить axios нужно
+  получается с единым форматом ошибок, чтобы не в компонентах это делать, дай
+  план как ты хочешь это сделать
+
+● Ниже предлагаю, как устроить слой API. Код пока не пишу.
+
+  Схема
+
+  UI (features / widgets)
+     ↓ используют только хуки
+  entities/booking/api   — хуки TanStack Query + bookingApi (запросы)
+     ↓
+  shared/api             — axios-инстанс + interceptor + ApiError
+     ↓
+  MSW / реальный сервер
+
+  Компоненты не знают про axios, URL и статусы. Они получают data, isPending и
+  error, причём error всегда одного типа — ApiError.
+
+  1. shared/api — общий HTTP-слой
+
+  http.ts — axios-инстанс:
+  axios.create({ baseURL: import.meta.env.VITE_API_URL ?? '', timeout: 10_000 })
+
+  Interceptor ответа превращает любую ошибку в ApiError:
+
+  ┌─────────────────────┬─────────┬───────────────┬─────────────────────────┐
+  │    Что случилось    │ status  │     code      │         message         │
+  ├─────────────────────┼─────────┼───────────────┼─────────────────────────┤
+  │ Сервер ответил {    │ из      │               │                         │
+  │ code, field,        │ ответа  │ из ответа     │ из ответа               │
+  │ message }           │         │               │                         │
+  ├─────────────────────┼─────────┼───────────────┼─────────────────────────┤
+  │ Сервер ответил без  │ из      │ UNKNOWN       │ общий текст по статусу  │
+  │ нашего формата      │ ответа  │               │ (Server error, ...)     │
+  ├─────────────────────┼─────────┼───────────────┼─────────────────────────┤
+  │ Нет ответа (сеть,   │ 0       │ NETWORK_ERROR │ Network error. Check    │
+  │ CORS)               │         │               │ your connection         │
+  ├─────────────────────┼─────────┼───────────────┼─────────────────────────┤
+  │ Таймаут             │ 0       │ TIMEOUT       │ Request timed out       │
+  ├─────────────────────┼─────────┼───────────────┼─────────────────────────┤
+  │ Отмена запроса      │ —       │ —             │ не трогаем, TanStack    │
+  │                     │         │               │ сам обрабатывает отмену │
+  └─────────────────────┴─────────┴───────────────┴─────────────────────────┘
+
+  apiError.ts:
+  class ApiError extends Error { status; code; field? }
+  isApiError(error): error is ApiError
+
+  Компонентам остаётся только error.message. Логику строят по status и code: 409
+  — конфликт, field — к какому полю привязать ошибку.
+
+  2. entities/booking/api — запросы к броням
+
+  bookingApi.ts — тонкие функции без логики, по одной на эндпоинт:
+  getByDate(date, signal) → Booking[]
+  create(input)           → Booking
+  update(id, patch)       → Booking
+  remove(id)              → void
+  Плюс тип BookingApi. Если бэкенд будет другим, меняется только этот файл.
+
+  bookingKeys.ts — ключи кэша:
+  bookingKeys.all          → ['bookings']
+  bookingKeys.byDate(date) → ['bookings', date]
+
+  Хуки (useBookings.ts, useBookingMutations.ts):
+  - useBookings(date) — useQuery, передаёт signal, чтобы при быстром
+    переключении дат старый запрос отменялся;
+  - useCreateBooking(), useUpdateBooking(), useDeleteBooking() — useMutation. В
+    onSettled они инвалидируют ['bookings', date], то есть перезапрашивают
+    список после любой мутации — и после успеха, и после ошибки.
+
+  Последний пункт закрывает серверную часть правила 8. Пришёл 409 — список
+  броней обновится сам. Данные формы остаются, потому что при ошибке мы форму не
+  сбрасываем. А error.message покажем в алерте.
+
+  Все хуки кладу в entity, а не в features. Для облегчённого FSD и одной
+  сущности так проще. Features (форма, удаление) будут просто вызывать эти хуки.
+
+  3. Настройка QueryClient в app/providers
+
+  - Повтор запросов: только при NETWORK_ERROR, TIMEOUT и 5xx, максимум один раз.
+    Повторять 4xx бессмысленно: 422 или 409 от повтора не исправятся.
+  - Мутации: без повторов. Повторный POST мог бы создать дубль брони.
+
+  4. Как UI будет использовать ошибки (это уже следующий шаг)
+
+  - Список: isPending → скелетон; error → алерт с error.message и кнопкой Retry
+    (refetch); пустой массив → «No bookings».
+  - Форма:
+    - есть error.field и это не 409 → setError(field, { message }) под нужным
+      Select;
+    - 409 → алерт над кнопками, как на твоём скрине; список уже обновился,
+      данные формы на месте;
+    - остальное → общий алерт с error.message.
+
+  Файлы
+
+  shared/api/
+    http.ts
+    apiError.ts
+    index.ts
+  entities/booking/api/
+    bookingApi.ts
+    bookingKeys.ts
+    useBookings.ts
+    useBookingMutations.ts
+  vite-env.d.ts   + VITE_API_URL
+  app/providers/AppProviders.tsx   правка retry
+
+  Порядок
+
+  1. shared/api: ApiError, axios и interceptor.
+  2. bookingApi и ключи.
+  3. Хуки TanStack Query.
+  4. Повторы запросов в QueryClient.
+
+  Начинаю с shared/api?
+
+> пока давай настроим axios и api bookings, field отдельно не обрабатываем там
+  будет общий alert на форме по ошибкам сервера либо нотификация я не решил
+  еще,
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(src\vite-env.d.ts)
+  ⎿  Added 1 line
+      1  interface ImportMetaEnv {
+      2    readonly VITE_API_MOCKING?: string
+      3 +  readonly VITE_API_URL?: string                                
+      4  }
+
+● Update(src\entities\booking\index.ts)
+  ⎿  Added 1 line
+      1  export type { Booking, BookingInput, BookingPatch } from './mode
+         l/types'
+      2  export { BOOKING_CONFIG } from './config/constants'
+      3 +export { bookingApi } from './api/bookingApi'                   
+      4  export { isOverlapping } from './lib/overlap'
+      5  export { validateBooking } from './lib/validateBooking'
+      6  export type { BookingValidationCode, BookingValidationError } fr
+         om './lib/validateBooking'
+
+● Настроил axios с единым форматом ошибок и API броней. field не обрабатываю: в
+  ApiError только status, code и message, для общего алерта или нотификации
+  этого хватит. Хуки TanStack Query пока не делал. tsc и eslint не запускал.
+
+  shared/api
+
+  apiError.ts (src/shared/api/apiError.ts) — класс ApiError и проверка
+  isApiError(error).
+  - status — HTTP-статус, 0 если ответа не было;
+  - code — код ошибки (OVERLAP, TOO_SHORT, NETWORK_ERROR, …);
+  - message — текст для пользователя.
+
+  http.ts (src/shared/api/http.ts) — axios-инстанс: baseURL из VITE_API_URL (по
+  умолчанию пусто, запросы ловит MSW), таймаут 10 секунд. Interceptor ответа
+  превращает любую ошибку в ApiError:
+
+  ┌───────────────────┬─────────┬───────────────────────────────────────────┐
+  │     Ситуация      │ status  │                   code                    │
+  ├───────────────────┼─────────┼───────────────────────────────────────────┤
+  │ Сервер ответил с  │ из      │ из тела, иначе UNKNOWN                    │
+  │ ошибкой           │ ответа  │                                           │
+  ├───────────────────┼─────────┼───────────────────────────────────────────┤
+  │ Таймаут           │ 0       │ TIMEOUT                                   │
+  ├───────────────────┼─────────┼───────────────────────────────────────────┤
+  │ Нет ответа (сеть, │ 0       │ NETWORK_ERROR                             │
+  │  CORS)            │         │                                           │
+  ├───────────────────┼─────────┼───────────────────────────────────────────┤
+  │ Не ошибка axios   │ 0       │ UNKNOWN                                   │
+  ├───────────────────┼─────────┼───────────────────────────────────────────┤
+  │ Отмена запроса    │ —       │ пробрасывается как есть, чтобы TanStack   │
+  │                   │         │ Query распознал отмену                    │
+  └───────────────────┴─────────┴───────────────────────────────────────────┘
+
+  Если в теле ответа нет message, подставляется «Something went wrong».
+
+  index.ts (src/shared/api/index.ts) — публичный API: http, ApiError,
+  isApiError.
+
+  entities/booking/api
+
+  bookingApi.ts (src/entities/booking/api/bookingApi.ts) — по одной функции на
+  запрос из контракта, все возвращают сразу data:
+  - getByDate(date, signal?) → GET /api/bookings?date=…, возвращает Booking[].
+    signal нужен, чтобы отменять запрос при быстром переключении дат;
+  - create(input) → POST, возвращает Booking;
+  - update(id, patch) → PATCH /:id, возвращает Booking;
+  - remove(id) → DELETE /:id.
+
+  Экспортировал bookingApi в entities/booking/index.ts
+  (src/entities/booking/index.ts). В vite-env.d.ts (src/vite-env.d.ts) добавил
+  тип для VITE_API_URL.
+
+  Как это будет в UI
+
+  if (error) <Alert severity="error">{error.message}</Alert>
+  if (isApiError(error) && error.status === 409) …
+
+  Для 409 по правилу 8 нужно ещё перезапросить список. Это сделаем в хуках
+  мутаций: после ответа, успешного или нет, инвалидируем кэш броней на эту дату.
+
+  Следующий шаг — ключи кэша и хуки TanStack Query (useBookings,
+  useCreateBooking, useUpdateBooking, useDeleteBooking). Делаем?
+
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\entities\booking\api\bookingApi.ts in the
+  IDE. This may or may not be related to the current task.</ide_opened_file>
+
+> а зачем мне код ошибки? для чего ? и в буке аборт сигнал тоже лишний
+
+● Update(src\entities\booking\api\bookingApi.ts)
+  ⎿  Added 3 lines, removed 3 lines
+       1  import { http } from '@/shared/api'
+       2  import type { Booking, BookingInput, BookingPatch } from '../mo
+          del/types'
+       3  
+       4 -const BOOKINGS_URL = '/api/bookings'                           
+       4 +const BOOKINGS_URL = '/bookings'                               
+       5  
+       6  export const bookingApi = {
+       7 -  getByDate: async (date: string, signal?: AbortSignal) => {   
+       8 -    const { data } = await http.get<Booking[]>(BOOKINGS_URL, { 
+         -params: { date }, signal })                                    
+       7 +  getByDate: async (date: string) => {                         
+       8 +    const { data } = await http.get<Booking[]>(BOOKINGS_URL, { 
+         +params: { date } })                                            
+       9      return data
+      10    },
+      11  
+
+● Убрал signal из getByDate в bookingApi.ts
+  (src/entities/booking/api/bookingApi.ts).
+
+  Заодно поправил путь: BOOKINGS_URL теперь '/bookings'. Ты поменял baseURL на
+  '/api', и со старым путём запросы уходили бы на /api/api/bookings, где MSW их
+  не ловит. Теперь итоговый адрес снова /api/bookings, обработчики менять не
+  нужно. Если потом зададут VITE_API_URL, в нём должен быть и /api.
+
+  Зачем код ошибки
+
+  Для общего алерта или нотификации он не нужен: ты показываешь error.message, а
+  конфликт (правило 8) отличается по status === 409. Код помогает только в двух
+  случаях:
+  - когда реакция UI зависит от конкретного правила, например подсветить
+    TOO_SHORT под полем — ты это решил не делать;
+  - когда тексты сообщений хранятся на клиенте (переводы): тогда клиент по коду
+    выбирает свой текст.
+
+  Сейчас ни то, ни другое не нужно, так что в ApiError достаточно status и
+  message. Предлагаю убрать code из ApiError и из interceptor.
+
+  В моках код можно оставить: он уже есть в ответе validateBooking, и по OVERLAP
+  обработчик выбирает между 409 и 422. Клиент его просто не будет читать.
+
+  Ещё одно следствие твоей правки: ты убрал timeout, поэтому ветка TIMEOUT в
+  interceptor больше не сработает. Если код убираем, её тоже стоит удалить.
+
+  Убрать code и ветку таймаута?
+
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\entities\booking\api\bookingApi.ts in the
+  IDE. This may or may not be related to the current task.</ide_opened_file>
+
+> да убирай лишнее
+
+  Read 1 file (ctrl+o to expand)
+
+● Write(src\shared\api\apiError.ts)
+  ⎿  Added 1 line, removed 3 lines
+       1  export class ApiError extends Error {
+       2    status: number
+       3 -  code: string                                                 
+       3  
+       5 -  constructor(status: number, code: string, message: string) { 
+       4 +  constructor(status: number, message: string) {               
+       5      super(message)
+       6      this.name = 'ApiError'
+       7      this.status = status
+       9 -    this.code = code                                           
+       8    }
+       9  }
+      10  
+
+● Убрал лишнее из ApiError и interceptor. IDE после записи показывала ошибки
+  «Expected 3 arguments» в http.ts. Они от старой версии apiError.ts, которая на
+  тот момент ещё не была перезаписана. Сейчас оба файла согласованы. Сам tsc и
+  eslint не запускал.
+
+  apiError.ts (src/shared/api/apiError.ts):
+  export class ApiError extends Error {
+    status: number
+    constructor(status: number, message: string) { ... }
+  }
+
+  http.ts (src/shared/api/http.ts) — interceptor превращает любую ошибку в
+  ApiError по трём случаям:
+
+  ┌─────────────────────┬──────────┬────────────────────────────────────────┐
+  │      Ситуация       │  status  │                message                 │
+  ├─────────────────────┼──────────┼────────────────────────────────────────┤
+  │ Сервер ответил      │ из       │ message из тела, иначе «Something went │
+  │ ошибкой             │ ответа   │  wrong»                                │
+  ├─────────────────────┼──────────┼────────────────────────────────────────┤
+  │ Нет ответа (сеть)   │ 0        │ «Network error. Check your connection» │
+  ├─────────────────────┼──────────┼────────────────────────────────────────┤
+  │ Не ошибка axios     │ 0        │ «Something went wrong»                 │
+  └─────────────────────┴──────────┴────────────────────────────────────────┘
+
+  Что убрал:
+  - code из ApiError и ErrorResponse;
+  - ветку таймаута, которая без timeout всё равно не срабатывала;
+  - проверку отмены через isCancel: после того как мы убрали signal, запросы
+    больше не отменяются.
+
+  В UI теперь хватает двух проверок:
+  error.message
+  isApiError(error) && error.status === 409
+
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\shared\api\http.ts in the IDE. This may or
+  may not be related to the current task.</ide_opened_file>
+
+> а зачем нам запосной мессадж, если ты в моках на серваке все описал и
+  настроил?
+
+● Сейчас моки всегда возвращают message, но запасной текст нужен для ответов,
+  которые не проходят через наши обработчики:
+
+  1. Сервер упал, а не ответил ошибкой. Если в обработчике MSW вылетит
+     исключение (например, request.json() на невалидном теле), ответ придёт не
+     из нашего кода, и формат будет другим. С реальным бэкендом то же самое:
+     500, 502 или 504 от прокси или балансировщика приходят HTML-страницей без
+     message.
+  2. Переход на реальный API. Мы специально сделали так, чтобы можно было убрать
+     моки и подставить бэкенд. Нет гарантии, что он будет отдавать ошибки в
+     нашем формате.
+  3. Что будет без запасного текста. data?.message вернёт undefined, и
+     пользователь увидит пустой алерт или нотификацию. А в ТЗ отдельно
+     оценивается корректное состояние ошибки.
+
+  То есть моки описывают ожидаемые ошибки: правила и 409. Запасной текст
+  закрывает неожиданные — сбой, обрыв сети, чужой формат ответа. Это одна
+  строка, поэтому я бы оставил.
+
+  Если хочешь минимум, можно убрать только первую проверку,
+  !isAxiosError(error). Через этот interceptor идут только ошибки axios, так что
+  эта ветка почти не срабатывает. Запасной текст для ответа сервера я бы не
+  трогал.
+
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\shared\api\http.ts in the IDE. This may or
+  may not be related to the current task.</ide_opened_file>
+
+> а какие ты описал там я забыл напомни на сревере?
+
+  Searched for 1 pattern, read 2 files (ctrl+o to expand)
+
+● Сервер отвечает ошибками в трёх случаях. Все описаны в handlers.ts
+  (src/mocks/handlers.ts), а тексты ошибок валидации берутся из
+  validateBooking.ts (src/entities/booking/lib/validateBooking.ts).
+
+  Ошибки запроса
+
+  ┌─────────────────────────────────┬────────┬──────────────────────────────┐
+  │             Запрос              │ Статус │           message            │
+  ├─────────────────────────────────┼────────┼──────────────────────────────┤
+  │ GET без ?date=                  │ 400    │ Query parameter "date" is    │
+  │                                 │        │ required                     │
+  ├─────────────────────────────────┼────────┼──────────────────────────────┤
+  │ PATCH или DELETE с              │ 404    │ Booking not found            │
+  │ несуществующим id               │        │                              │
+  └─────────────────────────────────┴────────┴──────────────────────────────┘
+
+  Ошибки валидации при POST и PATCH
+
+  Проверки идут по порядку, сервер возвращает первую найденную ошибку:
+
+  ┌─────┬────────────────────────────┬────────┬─────────────────────────────┐
+  │  #  │           Когда            │ Статус │           message           │
+  ├─────┼────────────────────────────┼────────┼─────────────────────────────┤
+  │ 1   │ Дата не YYYY-MM-DD или не  │ 422    │ Date must be in YYYY-MM-DD  │
+  │     │ существует                 │        │ format                      │
+  ├─────┼────────────────────────────┼────────┼─────────────────────────────┤
+  │ 2   │ Начало не HH:mm            │ 422    │ Start must be in HH:mm      │
+  │     │                            │        │ format                      │
+  ├─────┼────────────────────────────┼────────┼─────────────────────────────┤
+  │ 3   │ Конец не HH:mm             │ 422    │ End must be in HH:mm format │
+  ├─────┼────────────────────────────┼────────┼─────────────────────────────┤
+  │ 4   │ Начало раньше 09:00        │ 422    │ Start cannot be earlier     │
+  │     │                            │        │ than 09:00                  │
+  ├─────┼────────────────────────────┼────────┼─────────────────────────────┤
+  │ 5   │ Конец позже 18:00          │ 422    │ End cannot be later than    │
+  │     │                            │        │ 18:00                       │
+  ├─────┼────────────────────────────┼────────┼─────────────────────────────┤
+  │ 6   │ Начало не раньше конца     │ 422    │ End must be after start     │
+  ├─────┼────────────────────────────┼────────┼─────────────────────────────┤
+  │ 7   │ Начало не кратно 15 мин    │ 422    │ Start must be a multiple of │
+  │     │                            │        │  15 minutes                 │
+  ├─────┼────────────────────────────┼────────┼─────────────────────────────┤
+  │ 8   │ Конец не кратен 15 мин     │ 422    │ End must be a multiple of   │
+  │     │                            │        │ 15 minutes                  │
+  ├─────┼────────────────────────────┼────────┼─────────────────────────────┤
+  │ 9   │ Короче 30 мин              │ 422    │ Minimum duration is 30      │
+  │     │                            │        │ minutes                     │
+  ├─────┼────────────────────────────┼────────┼─────────────────────────────┤
+  │ 10  │ Длиннее 2 ч                │ 422    │ Maximum duration is 2 hours │
+  ├─────┼────────────────────────────┼────────┼─────────────────────────────┤
+  │ 11  │ Прошедшая дата             │ 422    │ Cannot book a past date     │
+  ├─────┼────────────────────────────┼────────┼─────────────────────────────┤
+  │ 12  │ Сегодня, начало уже прошло │ 422    │ Start time has already      │
+  │     │                            │        │ passed                      │
+  ├─────┼────────────────────────────┼────────┼─────────────────────────────┤
+  │ 13  │ Пересечение с другой       │ 409    │ This time overlaps with     │
+  │     │ бронью                     │        │ another booking             │
+  └─────┴────────────────────────────┴────────┴─────────────────────────────┘
+
+  Тексты не захардкожены: время, шаг и длительности подставляются из
+  BOOKING_CONFIG.
+
+  Что ещё учесть
+
+  1. В ответах сервера есть code, а у ошибок валидации ещё и field. Клиент их не
+     читает, берёт только message и статус. Чтобы ответы были чище, можно
+     отдавать из обработчиков только { message }. Код всё равно нужен внутри: по
+     OVERLAP выбирается между 409 и 422.
+  2. Чего сервер не ловит:
+     - невалидный JSON в теле запроса: request.json() упадёт, и MSW сам вернёт
+       500;
+     - пустое тело POST: поля будут undefined, и isValidDate(undefined) может
+       упасть раньше, чем вернётся 422.
+
+     В обоих случаях ответ придёт без нашего message, и здесь как раз пригодится
+     запасной текст в http.ts. Из UI такие запросы не уйдут: форма всегда
+     отправляет все поля.
+
+  Убрать code и field из ответов сервера?
+
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\entities\booking\lib\validateBooking.ts in
+  the IDE. This may or may not be related to the current
+  task.</ide_opened_file>
+
+> ну я думал что на клиенте я буду поле подствечивать а потом подумал зачем
+  если я могу в форме сделать алерт и все и вывести ошибки или нотификацию
+
+● Да, так можно, но здесь два разных источника ошибок, и показывать их удобнее
+  по-разному.
+
+  Ошибки сервера — алерт в форме. Это 409, 404, сеть, 500. Они относятся не к
+  конкретному полю, а ко всему запросу. Тут ты прав: field с сервера не нужен,
+  хватит message в алерте над кнопками, как на твоём скрине.
+
+  Ошибки клиентской валидации — я бы показывал под полем. Это yup и
+  validateBooking до отправки. Причины:
+  - пользователь сразу видит, что править, например End при «Minimum duration is
+    30 minutes»;
+  - в RHF + MUI это ничего не стоит: error и helperText у Select, и field у нас
+    уже есть в validateBooking;
+  - доступность, которую оценивают по ТЗ: MUI сам ставит aria-invalid и
+    связывает текст с полем. С общим алертом это пришлось бы делать вручную.
+
+  Большую часть ошибок клиент вообще не покажет. Значения выбираются из Select,
+  а недоступные варианты (прошлое, занятые, неподходящая длительность) будут
+  неактивны. Под полем ошибка появится редко, но там ей и место.
+
+  Если всё же хочешь только алерт, тогда field из validateBooking можно убрать
+  целиком, и он станет проще. Это тоже рабочий вариант, просто чуть хуже по UX и
+  доступности.
+
+  Моя рекомендация:
+  - клиент: ошибки под полем через field;
+  - сервер: общий алерт;
+  - из ответов моков: убрать code и field, отдавать только { message }.
+
+  Как делаем?
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\entities\booking\api\bookingApi.ts in the
+  IDE. This may or may not be related to the current task.</ide_opened_file>
+
+> оставляем как есть code нужен mcw, field rhf, message и тому и тому
+
+  Wrote 1 memory (ctrl+o to expand)
+
+● Хорошо, оставляем { code, field, message } как есть. Каждое поле нужно своей
+  стороне:
+  - code — MSW по нему выбирает статус: OVERLAP → 409, остальное → 422.
+  - field — RHF через setError(field, …) показывает ошибку клиентской валидации
+    под нужным полем.
+  - message — текст и под полем, и в общем алерте для ошибок сервера.
+
+  На клиенте ApiError читает только status и message, лишнее в ответе ему не
+  мешает. Записал это решение в память.
+
+  Следующий шаг — ключи кэша и хуки TanStack Query: useBookings,
+  useCreateBooking, useUpdateBooking, useDeleteBooking.
+
+> <ide_selection>The user selected the lines 4 to 4 from
+  c:\Users\Admin\Desktop\MadDevs\src\entities\booking\api\bookingApi.ts:
+  const BOOKINGS_URL = '/bookings'
+
+  This may or may not be related to the current task.</ide_selection>
+
+> const BOOKINGS_URL = '/bookings'
+
+  вот это с api вынести по fsd может в другое место надо?
+
+● Я бы оставил его в bookingApi.ts. По FSD константу кладут рядом с единственным
+  местом, где она используется. BOOKINGS_URL нужен только сегменту api сущности
+  booking, поэтому он и лежит в entities/booking/api.
+
+  Куда его можно было бы перенести и почему не стоит:
+  - shared/config или shared/api. shared не должен знать о предметной области.
+    Пути /bookings там не место: это знание о сущности брони, а не общая
+    инфраструктура.
+  - entities/booking/config. Технически допустимо, но смысл появляется, только
+    если путь нужен в нескольких сегментах сущности. Сейчас он нужен только в
+    api.
+  - Общая константа с моками. В handlers.ts свой путь '/api/bookings', с
+    префиксом: моки ловят итоговый URL, а клиент добавляет /api через baseURL.
+    Можно было бы их связать, но это привяжет моки к деталям клиента. Моки
+    должны описывать сервер независимо от клиента, поэтому дублирование здесь
+    осознанное.
+
+  Выносить имеет смысл только baseURL — он уже в shared/api/http.ts и берётся из
+  env.
+
+> давай теперь класические хуки tanstack query с ключами напишем под запросы
+
+  Read 2 files (ctrl+o to expand)
+
+● Update(src\entities\booking\index.ts)
+  ⎿  Added 3 lines
+      1  export type { Booking, BookingInput, BookingPatch } from './mode
+         l/types'
+      2  export { BOOKING_CONFIG } from './config/constants'
+      3  export { bookingApi } from './api/bookingApi'
+      4 +export { bookingKeys } from './api/bookingKeys'                 
+      5 +export { useBookings } from './api/useBookings'                 
+      6 +export { useCreateBooking, useUpdateBooking, useDeleteBooking } 
+        +from './api/useBookingMutations'                                
+      7  export { isOverlapping } from './lib/overlap'
+      8  export { validateBooking } from './lib/validateBooking'
+      9  export type { BookingValidationCode, BookingValidationError } fr
+         om './lib/validateBooking'
+
+● Написал ключи и хуки для всех четырёх запросов в entities/booking/api и
+  экспортировал их из index.ts (src/entities/booking/index.ts). tsc и eslint не
+  запускал.
+
+  Ключи — bookingKeys.ts (src/entities/booking/api/bookingKeys.ts)
+
+  bookingKeys.all           // ['bookings']
+  bookingKeys.byDate(date)  // ['bookings', '2026-10-29']
+  Это стандартная иерархия: инвалидация по all затрагивает все byDate сразу.
+
+  Запрос списка — useBookings.ts (src/entities/booking/api/useBookings.ts)
+
+  const { data, isPending, isError, error, refetch } = useBookings(date)
+  Своя запись в кэше на каждую дату. Если вернуться на уже открытую дату, список
+  покажется сразу, а в фоне обновится.
+
+  Мутации — useBookingMutations.ts
+  (src/entities/booking/api/useBookingMutations.ts)
+
+  useCreateBooking().mutate(input)
+  useUpdateBooking().mutate({ id, patch })
+  useDeleteBooking().mutate(id)
+  Во всех трёх после ответа вызывается onSettled, и он инвалидирует
+  bookingKeys.all. На это есть две причины:
+  - onSettled, а не onSuccess: список перезапрашивается и после ошибки. Это и
+    есть правило 8: пришёл 409, а список уже свежий.
+  - all, а не byDate: при редактировании бронь может переехать на другую дату, и
+    устареют оба дня. Перезапросятся только те даты, что сейчас на экране,
+    остальные просто пометятся устаревшими.
+
+  Повторяющуюся инвалидацию вынес во внутренний useInvalidateBookings, наружу он
+  не экспортируется.
+
+  Для формы при 409 этого достаточно: mutate не трогает её данные, а
+  error.message и error.status берём из mutation.error и показываем алертом.
+
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\shared\lib\time.ts in the IDE. This may or
+  may not be related to the current task.</ide_opened_file>
+
+> ну что погнали к ui теперь, сделай bookingPage и выбор даты пока что
+
+  Searched for 1 pattern, read 3 files (ctrl+o to expand)
+
+● Write(src\app\App.tsx)
+  ⎿  Added 2 lines, removed 1 line
+       1 +import { BookingPage } from '@/pages/booking'                  
+       2  import { AppProviders } from './providers/AppProviders'
+       3  
+       4  export function App() {
+       5    return (
+       6      <AppProviders>
+       6 -      <h1>Meeting room booking</h1>                            
+       7 +      <BookingPage />                                          
+       8      </AppProviders>
+       9    )
+      10  }
+
+● Сделал страницу и выбор даты. Сам не запускал, tsc и eslint тоже не гонял:
+  проверь через npm run dev.
+
+  Страница — pages/booking/ui/BookingPage.tsx
+  (src/pages/booking/ui/BookingPage.tsx)
+
+  - Хранит выбранную дату: useState(() => dayjs()), по умолчанию сегодня.
+  - Шапка как на скрине: заголовок «Meeting room booking» слева (настоящий h1,
+    для доступности), навигация по датам справа.
+  - Обёрнута в Container maxWidth="lg". Ниже позже встанут таймлайн и форма.
+  - Подключена в App.tsx (src/app/App.tsx) вместо заглушки.
+
+  Выбор даты — features/date-navigation/ui/DateNavigation.tsx
+  (src/features/date-navigation/ui/DateNavigation.tsx)
+
+  Контролируемый компонент: получает value и вызывает onChange, своего состояния
+  у него нет.
+  - ‹ и › — предыдущий и следующий день. У иконок-кнопок есть aria-label, чтобы
+    скринридер их озвучивал.
+  - DatePicker из MUI X в формате Thu, Oct 29, 2026, как на скрине. Можно
+    открыть календарь или ввести дату с клавиатуры. Недописанную дату (isValid()
+    false) наверх не отдаём.
+  - Today — возврат на сегодня. Кнопка неактивна, если сегодня уже выбрано.
+
+  Прошедшие даты выбирать можно: смотреть брони на них разрешено, ТЗ запрещает
+  только создавать. Блокировку создания добавим в форме.
+
+  Что отличается от скрина
+
+  На скрине дата — кнопка с иконкой календаря, а у меня обычное поле DatePicker.
+  Поле проще и доступнее: можно ввести дату с клавиатуры, есть подпись. Если
+  нужен вид как на скрине, сделаю кнопку, которая открывает календарь.
+
+  Дату храню как Dayjs. Для useBookings её нужно будет переводить в строку:
+  selectedDate.format(DATE_FORMAT).
+
+> <ide_opened_file>The user opened the file c:\Users\Admin\Desktop\MadDevs\src\
+  features\date-navigation\ui\DateNavigation.tsx in the IDE. This may or may
+  not be related to the current task.</ide_opened_file>
+
+> нейминг плохой выбери DateSelector, и посмотри tsc, ты не правильно артирбуты
+  из mui используешь
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● MUI 9 removed system props — they must go through sx. Renaming and fixing.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Write(src\features\date-selector\ui\DateSelector.tsx)
+  ⎿  Wrote 38 lines to src\features\date-selector\ui\DateSelector.tsx
+       1 import dayjs, { type Dayjs } from 'dayjs'
+       2 import { Button, IconButton, Stack } from '@mui/material'
+       3 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft'
+       4 import ChevronRightIcon from '@mui/icons-material/ChevronRight'
+       5 import { DatePicker } from '@mui/x-date-pickers/DatePicker'
+       6
+       7 type DateSelectorProps = {
+       8   value: Dayjs
+       9   onChange: (date: Dayjs) => void
+      10 }
+     … +28 lines (ctrl+o to expand)
+
+● Write(src\pages\booking\ui\BookingPage.tsx)
+  ⎿  Added 7 lines, removed 4 lines
+       1  import { useState } from 'react'
+       2  import dayjs from 'dayjs'
+       3  import { Container, Stack, Typography } from '@mui/material'
+       4 -import { DateNavigation } from '@/features/date-navigation'    
+       4 +import { DateSelector } from '@/features/date-selector'        
+       5  
+       6  export function BookingPage() {
+       7    const [selectedDate, setSelectedDate] = useState(() => dayjs(
+          ))
+       8  
+       9    return (
+      10      <Container maxWidth="lg" sx={{ py: 4 }}>
+      11 -      <Stack direction="row" justifyContent="space-between" ali
+         -gnItems="center" mb={3}>                                       
+      12 -        <Typography variant="h5" component="h1" fontWeight={600
+         -}>                                                             
+      11 +      <Stack                                                   
+      12 +        direction="row"                                        
+      13 +        sx={{ justifyContent: 'space-between', alignItems: 'cen
+         +ter', mb: 3 }}                                                 
+      14 +      >                                                        
+      15 +        <Typography variant="h5" component="h1" sx={{ fontWeigh
+         +t: 600 }}>                                                     
+      16            Meeting room booking
+      17          </Typography>
+      15 -        <DateNavigation value={selectedDate} onChange={setSelec
+         -tedDate} />                                                    
+      18 +        <DateSelector value={selectedDate} onChange={setSelecte
+         +dDate} />                                                      
+      19        </Stack>
+      20      </Container>
+      21    )
+
+  Ran 1 shell command, wrote 1 memory (ctrl+o to expand)
+
+● Переименовал фичу в DateSelector и исправил атрибуты MUI. tsc теперь проходит
+  без ошибок.
+
+  Нейминг: features/date-navigation → features/date-selector
+  (src/features/date-selector/ui/DateSelector.tsx), компонент и пропсы —
+  DateSelector и DateSelectorProps. Старую папку удалил, импорт в
+  BookingPage.tsx (src/pages/booking/ui/BookingPage.tsx) обновил.
+
+  Ошибка с MUI: у нас MUI 9, а в нём у Stack, Typography и Box больше нет
+  системных пропсов. Атрибуты alignItems, justifyContent, mb, fontWeight я
+  передавал напрямую, а теперь их надо задавать через sx. Отдельными пропсами
+  остаются только собственные пропсы компонента: direction, spacing, variant,
+  component.
+
+  <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+  <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems:
+  'center', mb: 3 }}>
+  <Typography variant="h5" component="h1" sx={{ fontWeight: 600 }}>
+
+  Записал в память, что MUI 9 и стили только через sx, чтобы дальше не
+  ошибаться.
+
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\features\date-selector\ui\DateSelector.tsx
+  in the IDE. This may or may not be related to the current
+  task.</ide_opened_file>
+
+> isSame напомни что? понятнее как будет
+
+● isSame — метод dayjs, который сравнивает две даты с точностью до указанной
+  единицы:
+
+  value.isSame(dayjs(), 'day')
+
+  Читается так: «value — тот же день, что и сейчас?» Второй аргумент задаёт
+  точность сравнения:
+  - 'day' — совпадают год, месяц и день, время не учитывается;
+  - без аргумента — сравнение до миллисекунды, и с dayjs() почти никогда не
+    совпадёт.
+
+  dayjs('2026-10-28 09:00').isSame(dayjs('2026-10-28 17:45'), 'day')  // true
+  dayjs('2026-10-28').isSame(dayjs('2026-10-29'), 'day')              // false
+  dayjs('2026-10-28').isSame(dayjs('2026-11-28'), 'month')            // false
+
+  Похожие методы: isBefore(x, 'day') и isAfter(x, 'day'). Мы их уже используем в
+  validateBooking для проверки прошедших дат.
+
+  Как сделать понятнее
+
+  У dayjs есть плагин isToday, он делает ровно эту проверку:
+
+  import isToday from 'dayjs/plugin/isToday'
+  dayjs.extend(isToday)
+
+  value.isToday()
+
+  Читается лучше, но плагин нужно подключить один раз при старте приложения,
+  например в app/ или в shared/lib. Иначе TS и рантайм не будут знать про метод.
+
+  Я бы оставил isSame(dayjs(), 'day'): это стандартный API без подключений, и та
+  же форма записи уже есть в validateBooking. Понятность здесь даёт имя
+  переменной isToday. Если хочешь value.isToday(), подключу плагин.
+
+> <ide_selection>The user selected the lines 7 to 7 from
+  c:\Users\Admin\Desktop\MadDevs\src\pages\booking\ui\BookingPage.tsx:
+    const [selectedDate, setSelectedDate] = useState(() => dayjs())
+
+  This may or may not be related to the current task.</ide_selection>
+
+> а ты точно уверен что я должен так передавать dayjs
+    const [selectedDate, setSelectedDate] = useState(() => dayjs())?
+  если  в API и в ключ кеша TanStack Query дату нужно передавать строкой:
+
+● Ты прав, для этой страницы удобнее хранить строку. Dayjs я взял по привычке,
+  потому что его ждёт DatePicker. Но остальным частям страницы нужна строка:
+
+  ┌──────────────────────────────────────────────────┬───────────────────┐
+  │                 Где используется                 │   Нужен формат    │
+  ├──────────────────────────────────────────────────┼───────────────────┤
+  │ useBookings(date) и ключ кэша ['bookings', date] │ строка YYYY-MM-DD │
+  ├──────────────────────────────────────────────────┼───────────────────┤
+  │ bookingApi.getByDate(date)                       │ строка            │
+  ├──────────────────────────────────────────────────┼───────────────────┤
+  │ поле date в форме и в BookingInput               │ строка            │
+  ├──────────────────────────────────────────────────┼───────────────────┤
+  │ validateBooking                                  │ строка            │
+  ├──────────────────────────────────────────────────┼───────────────────┤
+  │ DatePicker                                       │ Dayjs             │
+  └──────────────────────────────────────────────────┴───────────────────┘
+
+  Со строкой в состоянии в формате контракта переводить дату нужно только в
+  одном месте — на границе с DatePicker. Иначе пришлось бы вызывать
+  selectedDate.format(DATE_FORMAT) в каждом месте, где дата уходит в API, кэш
+  или форму.
+
+  Есть и ещё одна причина. Dayjs — объект, и dayjs() содержит текущее время до
+  миллисекунды. Два объекта на один и тот же день не равны (!==). Строки
+  '2026-10-28' === '2026-10-28' сравниваются надёжно: для useEffect, useMemo и
+  ключей это важно.
+
+  Как это выглядит:
+
+  const [selectedDate, setSelectedDate] = useState(() =>
+  dayjs().format(DATE_FORMAT))
+
+  <DateSelector value={selectedDate} onChange={setSelectedDate} />
+
+  Тогда DateSelector принимает и возвращает строку, а Dayjs использует только
+  внутри себя:
+
+  type DateSelectorProps = {
+    value: string
+    onChange: (date: string) => void
+  }
+
+  const date = dayjs(value)
+  const change = (next: Dayjs) => onChange(next.format(DATE_FORMAT))
+
+  <DatePicker value={date} onChange={(next) => next?.isValid() && change(next)}
+  />
+
+  Снаружи компонент работает только со строками в формате контракта, а детали
+  DatePicker остаются внутри.
+
+  Переделать так?
+
+> да
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(src\pages\booking\ui\BookingPage.tsx)
+  ⎿  Added 1 line
+      2  import dayjs from 'dayjs'
+      3  import { Container, Stack, Typography } from '@mui/material'
+      4  import { DateSelector } from '@/features/date-selector'
+      5 +import { DATE_FORMAT } from '@/shared/lib/time'                 
+      6  
+      7  export function BookingPage() {
+      8    const [selectedDate, setSelectedDate] = useState(() => dayjs()
+         .format(DATE_FORMAT))
+
+● Переделал: дата на странице теперь хранится строкой в формате YYYY-MM-DD, а
+  Dayjs используется только внутри DateSelector. tsc не запускал. Ошибка «Cannot
+  find name 'DATE_FORMAT'» в IDE появилась между двумя правками, до того как я
+  добавил импорт, сейчас импорт на месте.
+
+  BookingPage.tsx (src/pages/booking/ui/BookingPage.tsx):
+  const [selectedDate, setSelectedDate] = useState(() =>
+  dayjs().format(DATE_FORMAT))
+  selectedDate — строка, её можно сразу передавать в useBookings(selectedDate),
+  в ключ кэша и в форму.
+
+  DateSelector.tsx (src/features/date-selector/ui/DateSelector.tsx):
+  - Пропсы — строки: value: string, onChange: (date: string) => void.
+  - Внутри строка один раз переводится в Dayjs (const date = dayjs(value)) для
+    DatePicker, кнопок ‹ ›, «Today» и проверки isToday.
+  - Наружу Dayjs уходит только через change, который форматирует его обратно в
+    строку DATE_FORMAT.
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\features\date-selector\ui\DateSelector.tsx
+  in the IDE. This may or may not be related to the current
+  task.</ide_opened_file>
+
+> я чуть переделал сделал shiftDays чтобы не так плохо выглядило инлайном
+  подделай под нее
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(src\features\date-selector\ui\DateSelector.tsx)
+  ⎿  Added 1 line, removed 1 line
+      1 -import dayjs, { type Dayjs } from 'dayjs'                       
+      1 +import dayjs from 'dayjs'                                       
+      2  import { Button, IconButton, Stack } from '@mui/material'
+      3  import ChevronLeftIcon from '@mui/icons-material/ChevronLeft'
+      4  import ChevronRightIcon from '@mui/icons-material/ChevronRight'
+
+● Подогнал DateSelector.tsx (src/features/date-selector/ui/DateSelector.tsx) под
+  твой shiftDays. Хелпер change больше нигде не используется. tsc не запускал.
+
+  const date = dayjs(value)
+  const isToday = date.isSame(dayjs(), 'day')
+  const shiftDays = (days: number) => onChange(date.add(days,
+  'day').format(DATE_FORMAT))
+
+  <IconButton aria-label="Previous day" onClick={() => shiftDays(-1)}>
+  <DatePicker onChange={(next) => next?.isValid() &&
+  onChange(next.format(DATE_FORMAT))} />
+  <IconButton aria-label="Next day" onClick={() => shiftDays(1)}>
+  <Button disabled={isToday} onClick={() =>
+  onChange(dayjs().format(DATE_FORMAT))}>
+
+  Что ещё поменял:
+  - Вернул isToday. В твоей правке его объявление пропало, хотя кнопка «Today»
+    на него ссылается (disabled={isToday}), и без него код бы не
+    скомпилировался. Если ты убрал его специально, чтобы кнопка была активна
+    всегда, скажи — уберу и disabled.
+  - Убрал неиспользуемый type Dayjs из импорта: после удаления change он больше
+    нигде не используется.
+
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\app\App.tsx in the IDE. This may or may
+  not be related to the current task.</ide_opened_file>
+
+> так по скрину дизайна что дальше делать там? список броней?
+
+● Да, следующим идёт левая карточка со списком броней в виде таймлайна дня. Без
+  неё форму не на чем проверять: в ней показывается выбранный слот и брони, с
+  которыми он может пересечься.
+
+  Что на скрине в левой карточке
+
+  Bookings · 09:00–18:00
+  09:00 ─────────────────────────────
+  09:30 ─────────────────────────────
+  10:00 ┌ Daily standup · 10:00–11:00  ✎ 🗑 ┐
+  10:30 └─────────────────────────────────┘
+  11:00 ┌ 1:1 · 11:00–11:30            ✎ 🗑 ┐
+  11:30 ─────────────────────────────
+  12:00 ┆ Selected · 12:00–13:00             ┆   ← пунктир: то, что выбрано в
+  форме
+
+  Как разложить по FSD
+
+  Что: BookingCard
+  Где: entities/booking/ui
+  Описание: Блок одной брони: «Title · 10:00–11:00». Кнопки действий передаются
+  через слот actions, сама сущность про редактирование и удаление не знает.
+  ────────────────────────────────────────
+  Что: DayTimeline
+  Где: widgets/day-timeline
+  Описание: Карточка целиком: шкала 09:00–18:00 с отметками каждые 30 минут.
+  Брони позиционируются по минутам (top и height считаются из timeToMinutes).
+  Состояния загрузки, ошибки и пустого дня тоже здесь.
+  ────────────────────────────────────────
+  Что: Кнопки ✎ и 🗑
+  Где: widgets/day-timeline пока как колбэки onEdit и onDelete
+  Описание: Удаление с подтверждением позже вынесем в features/delete-booking.
+  ────────────────────────────────────────
+  Что: Блок «Selected»
+  Где: тот же виджет, проп selection?: { start, end }
+  Описание: Подключим, когда будет форма.
+
+  useBookings(selectedDate) вызывается в виджете. Страница передаёт ему только
+  дату.
+
+  Состояния (оцениваются по ТЗ)
+
+  - загрузка — скелетоны на месте блоков броней;
+  - ошибка — Alert с error.message и кнопкой Retry (refetch);
+  - пусто — шкала остаётся, поверх неё текст «No bookings for this day»;
+  - прошедшая дата — брони видны, кнопки ✎ и 🗑 скрыты или неактивны.
+
+  Порядок
+
+  1. BookingCard в entity.
+  2. Виджет DayTimeline: шкала, брони из useBookings, все состояния.
+  3. Подключить в BookingPage двумя колонками: слева таймлайн, справа пока
+     пусто.
+
+  После этого — форма справа и блок «Selected».
+
+  По прошедшим датам: я бы на них вообще скрыл кнопки ✎ и 🗑, брони только для
+  просмотра. Начинаем с BookingCard?
+
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\pages\booking\ui\BookingPage.tsx in the
+  IDE. This may or may not be related to the current task.</ide_opened_file>
+
+> да только назови BookingItem и BookingList, по стилям не борщи только самые
+  нужные
+
+  Searched for 1 pattern, read 2 files (ctrl+o to expand)
+
+● Update(src\pages\booking\ui\BookingPage.tsx)
+  ⎿  Added 1 line
+      2  import dayjs from 'dayjs'
+      3  import { Container, Stack, Typography } from '@mui/material'
+      4  import { DateSelector } from '@/features/date-selector'
+      5 +import { BookingList } from '@/widgets/booking-list'            
+      6  import { DATE_FORMAT } from '@/shared/lib/time'
+      7  
+      8  export function BookingPage() {
+
+● Update(src\widgets\booking-list\ui\BookingList.tsx)
+  ⎿  Added 1 line, removed 1 line
+      59    return (
+      60      <Paper variant="outlined" sx={{ p: 2 }}>
+      61        <Typography variant="subtitle1" component="h2" sx={{ mb: 
+          1 }}>
+      62 -        Bookings · {workingDayStart}–{workingDayEnd}           
+      62 +        Bookings, {workingDayStart}-{workingDayEnd}            
+      63        </Typography>
+      64  
+      65        {isPending && <Skeleton variant="rounded" height={rows.le
+          ngth * ROW_HEIGHT} />}
+
+  Searched for 1 pattern, wrote 1 memory (ctrl+o to expand)
+
+● Сделал BookingItem и BookingList, стили — только самые нужные. В коде больше
+  нет – и ·, только ASCII. tsc не запускал. Ошибки, которые IDE показывала по
+  иконке, были промежуточными: импорт и использование я менял двумя отдельными
+  правками, сейчас они совпадают.
+
+  BookingItem — entities/booking/ui/BookingItem.tsx
+  (src/entities/booking/ui/BookingItem.tsx)
+
+  Одна бронь: «Daily standup, 10:00-11:00», без названия — только время. Кнопки
+  передаются через проп actions, поэтому сущность ничего не знает про
+  редактирование и удаление. Стили: flex, синий фон, белый текст.
+
+  BookingList — widgets/booking-list/ui/BookingList.tsx
+  (src/widgets/booking-list/ui/BookingList.tsx)
+
+  - Сам берёт данные через useBookings(date), а страница передаёт только дату.
+  - Шкала: строки по 30 минут от 09:00 до 18:00, строятся из BOOKING_CONFIG.
+  - Брони позиционируются абсолютно по минутам, поэтому бронь 10:15–10:45
+    встанет точно на своё место.
+  - Состояния:
+    - загрузка — скелетон;
+    - ошибка — Alert с error.message и кнопкой Retry;
+    - пустой день — «No bookings for this day» над шкалой.
+  - Кнопки ✎ и 🗑 — onEdit и onDelete пока необязательны, поэтому кнопки уже
+    видны, но ничего не делают. Подключим их вместе с формой и удалением. У
+    каждой кнопки aria-label с временем брони.
+  - Прошедшая дата — кнопок нет, брони только для просмотра.
+  - Брони размечены как список ul/li, чтобы скринридер читал их как список.
+
+  Подключил виджет в BookingPage.tsx (src/pages/booking/ui/BookingPage.tsx) под
+  шапкой.
+
+  Что упростил относительно скрина
+
+  - В подписях вместо · и – запятая и дефис. Если нужен вид как на скрине, их
+    можно вывести через HTML-сущности &middot; и &ndash;: в исходнике останется
+    ASCII.
+  - Иконка удаления — DeleteOutlined: DeleteOutline в установленной версии нет.
+  - Метки 18:00 внизу шкалы нет, конец дня указан в заголовке.
+
+> <ide_selection>The user selected the lines 9 to 22 from
+  c:\Users\Admin\Desktop\MadDevs\src\widgets\booking-list\ui\BookingList.tsx:
+  const ROW_MINUTES = 30
+  const ROW_HEIGHT = 36
+  const LABEL_WIDTH = 56
+
+  const { workingDayStart, workingDayEnd } = BOOKING_CONFIG
+  const dayStartMinutes = timeToMinutes(workingDayStart)
+  const dayEndMinutes = timeToMinutes(workingDayEnd)
+
+  const rows = Array.from({ length: (dayEndMinutes - dayStartMinutes) /
+  ROW_MINUTES }, (_, index) =>
+    minutesToTime(dayStartMinutes + index * ROW_MINUTES),
+  )
+
+  const toPx = (minutes: number) => (minutes / ROW_MINUTES) * ROW_HEIGHT
+
+  This may or may not be related to the current task.</ide_selection>
+
+> <pasted_content id="a45f">
+  const ROW_MINUTES = 30
+  const ROW_HEIGHT = 36
+  const LABEL_WIDTH = 56
+
+  const { workingDayStart, workingDayEnd } = BOOKING_CONFIG
+  const dayStartMinutes = timeToMinutes(workingDayStart)
+  const dayEndMinutes = timeToMinutes(workingDayEnd)
+
+  const rows = Array.from({ length: (dayEndMinutes - dayStartMinutes) /
+  ROW_MINUTES }, (_, index) =>
+    minutesToTime(dayStartMinutes + index * ROW_MINUTES),
+  )
+
+  const toPx = (minutes: number) => (minutes / ROW_MINUTES) * ROW_HEIGHT
+  </pasted_content id="a45f">
+
+  а вот это повыносить все не хочешь?
+
+  Read 1 file (ctrl+o to expand)
+
+● Write(src\widgets\booking-list\config\timeline.ts)
+  ⎿  Wrote 3 lines to src\widgets\booking-list\config\timeline.ts
+      1 export const ROW_MINUTES = 30
+      2 export const ROW_HEIGHT = 36
+      3 export const LABEL_WIDTH = 56
+
+● Write(src\widgets\booking-list\lib\timeline.ts)
+  ⎿  Wrote 25 lines to src\widgets\booking-list\lib\timeline.ts
+       1 import { BOOKING_CONFIG } from '@/entities/booking'
+       2 import { minutesToTime, timeToMinutes } from '@/shared/lib/time'
+       3 import { ROW_HEIGHT, ROW_MINUTES } from '../config/timeline'
+       4
+       5 type TimeRange = {
+       6   start: string
+       7   end: string
+       8 }
+       9
+      10 const dayStartMinutes = timeToMinutes(BOOKING_CONFIG.workingDayS
+     … +16 lines (ctrl+o to expand)
+
+● Update(src\widgets\booking-list\ui\BookingList.tsx)
+  ⎿  Added 2 lines, removed 15 lines
+       4  import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutli
+          ned'
+       5  import { BOOKING_CONFIG, BookingItem, useBookings } from '@/ent
+          ities/booking'
+       6  import type { Booking } from '@/entities/booking'
+       7 -import { minutesToTime, timeToMinutes } from '@/shared/lib/time
+         -'                                                              
+       7 +import { LABEL_WIDTH, ROW_HEIGHT } from '../config/timeline'   
+       8 +import { getTimelinePosition, timelineHeight, timelineRows } fr
+         +om '../lib/timeline'                                           
+       9  
+       9 -const ROW_MINUTES = 30                                         
+      10 -const ROW_HEIGHT = 36                                          
+      11 -const LABEL_WIDTH = 56                                         
+      12 -                                                               
+      13 -const { workingDayStart, workingDayEnd } = BOOKING_CONFIG      
+      14 -const dayStartMinutes = timeToMinutes(workingDayStart)         
+      15 -const dayEndMinutes = timeToMinutes(workingDayEnd)             
+      16 -                                                               
+      17 -const rows = Array.from({ length: (dayEndMinutes - dayStartMinu
+         -tes) / ROW_MINUTES }, (_, index) =>                            
+      18 -  minutesToTime(dayStartMinutes + index * ROW_MINUTES),        
+      19 -)                                                              
+      20 -                                                               
+      21 -const toPx = (minutes: number) => (minutes / ROW_MINUTES) * ROW
+         -_HEIGHT                                                        
+      22 -                                                               
+      10  type BookingListProps = {
+      11    date: string
+      12    onEdit?: (booking: Booking) => void
+
+● Update(src\widgets\booking-list\ui\BookingList.tsx)
+  ⎿  Added 1 line, removed 2 lines
+      91                      position: 'absolute',
+      92                      left: LABEL_WIDTH,
+      93                      right: 0,
+      94 -                    top: toPx(timeToMinutes(booking.start) - da
+         -yStartMinutes),                                                
+      95 -                    height: toPx(timeToMinutes(booking.end) - t
+         -imeToMinutes(booking.start)),                                  
+      94 +                    ...getTimelinePosition(booking),           
+      95                      py: '2px',
+      96                    }}
+      97                  >
+
+● Да, вынес. В компоненте осталась только разметка, а таймлайн разложен по
+  сегментам виджета, как в FSD:
+
+  widgets/booking-list/
+    config/timeline.ts   ROW_MINUTES, ROW_HEIGHT, LABEL_WIDTH
+    lib/timeline.ts      timelineRows, timelineHeight, getTimelinePosition
+    ui/BookingList.tsx
+
+  - config/timeline.ts (src/widgets/booking-list/config/timeline.ts) — размеры
+    шкалы: шаг строки, высота строки, ширина колонки с метками.
+  - lib/timeline.ts (src/widgets/booking-list/lib/timeline.ts) — расчёты:
+    - timelineRows — метки 09:00, 09:30 … 17:30;
+    - timelineHeight — высота всей шкалы, теперь её использует скелетон;
+    - getTimelinePosition({ start, end }) — возвращает { top, height } в
+      пикселях. В компоненте это одна строка: ...getTimelinePosition(booking).
+      Эта же функция подойдёт для пунктирного блока «Selected», когда будет
+      форма.
+
+    dayStartMinutes и toPx стали внутренними: снаружи они не нужны.
+  - BookingList.tsx (src/widgets/booking-list/ui/BookingList.tsx) —
+    workingDayStart и workingDayEnd для заголовка деструктурируются внутри
+    компонента.
+
+  Почему в виджете, а не в entities/booking или shared: пиксели и высота строк
+  относятся только к отображению этого таймлайна. Это не бизнес-правила брони и
+  не общая утилита.
+
+  tsc не запускал. Ошибки, которые IDE показывала после правок, были
+  промежуточными: я менял файл по частям, и последние правки убрали старые rows,
+  toPx и timeToMinutes.
+
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\widgets\booking-list\ui\BookingList.tsx in
+  the IDE. This may or may not be related to the current
+  task.</ide_opened_file>
+
+> и скелетон убери просто закгрузку
+
+● Update(src\widgets\booking-list\ui\BookingList.tsx)
+  ⎿  Added 5 lines, removed 1 line
+      50          Bookings, {workingDayStart}-{workingDayEnd}
+      51        </Typography>
+      52  
+      53 -      {isPending && <Skeleton variant="rounded" height={timelin
+         -eHeight} />}                                                   
+      53 +      {isPending && (                                          
+      54 +        <Box sx={{ display: 'flex', justifyContent: 'center', p
+         +y: 4 }}>                                                       
+      55 +          <CircularProgress aria-label="Loading bookings" />   
+      56 +        </Box>                                                 
+      57 +      )}                                                       
+      58  
+      59        {isError && (
+      60          <Alert
+
+● Update(src\widgets\booking-list\lib\timeline.ts)
+  ⎿  Removed 2 lines
+      17    (_, index) => minutesToTime(dayStartMinutes + index * ROW_MIN
+          UTES),
+      18  )
+      19  
+      20 -export const timelineHeight = timelineRows.length * ROW_HEIGHT 
+      21 -                                                               
+      20  export const getTimelinePosition = ({ start, end }: TimeRange) 
+          => ({
+      21    top: toPx(timeToMinutes(start) - dayStartMinutes),
+      22    height: toPx(timeToMinutes(end) - timeToMinutes(start)),
+
+● Убрал скелетон: пока брони загружаются, в карточке по центру крутится
+  CircularProgress. У спиннера есть aria-label="Loading bookings", чтобы
+  скринридер озвучивал загрузку. Ошибки в IDE после первой правки были
+  промежуточными: импорт CircularProgress и удаление Skeleton я внёс следующими
+  правками. tsc не запускал.
+
+  {isPending && (
+    <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+      <CircularProgress aria-label="Loading bookings" />
+    </Box>
+  )}
+
+  Изменения в файлах:
+  - BookingList.tsx (src/widgets/booking-list/ui/BookingList.tsx): Skeleton
+    заменён на CircularProgress, убран импорт timelineHeight.
+  - lib/timeline.ts (src/widgets/booking-list/lib/timeline.ts): удалён
+    timelineHeight, он был нужен только скелетону.
+
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\widgets\booking-list\ui\BookingList.tsx in
+  the IDE. This may or may not be related to the current
+  task.</ide_opened_file>
+
+> скрыть нужно кнопки для тех слотов что уже прошли по времени
+
+  Read 1 file (ctrl+o to expand)
+● Update(src\widgets\booking-list\ui\BookingList.tsx)
+  ⎿  Added 2 lines, removed 2 lines
+      15  
+      16  export function BookingList({ date, onEdit, onDelete }: Booking
+          ListProps) {
+      17    const { data: bookings, isPending, isError, error, refetch } 
+          = useBookings(date)
+      18 -  const isPastDate = dayjs(date).isBefore(dayjs(), 'day')      
+      18 +  const now = dayjs()                                          
+      19    const { workingDayStart, workingDayEnd } = BOOKING_CONFIG
+      20  
+      21    const renderActions = (booking: Booking) => {
+      22 -    if (isPastDate) return null                                
+      22 +    if (isBookingStarted(booking, now)) return null            
+      23      const label = `${booking.start}-${booking.end}`
+      24  
+      25      return (
+
+● Write(src\entities\booking\lib\isBookingStarted.ts)
+  ⎿  Added 1 line, removed 2 lines
+      1 -import { type Dayjs } from 'dayjs'                              
+      2 -import dayjs from 'dayjs'                                       
+      1 +import dayjs, { type Dayjs } from 'dayjs'                       
+      2  import type { Booking } from '../model/types'
+      3  
+      4  export const isBookingStarted = ({ date, start }: Booking, now: 
+         Dayjs) =>
+
+● Кнопки ✎ и 🗑 теперь скрыты у броней, время начала которых уже наступило, в том
+  числе у тех, что идут прямо сейчас. Брони на прошедшие даты попадают сюда же,
+  поэтому отдельная проверка isPastDate больше не нужна, я её убрал. tsc не
+  запускал.
+
+  Новая функция — entities/booking/lib/isBookingStarted.ts
+  (src/entities/booking/lib/isBookingStarted.ts):
+  export const isBookingStarted = ({ date, start }: Booking, now: Dayjs) =>
+    !dayjs(`${date}T${start}`).isAfter(now)
+  Она склеивает дату и время начала в один момент и сравнивает его с now.
+
+  В BookingList.tsx (src/widgets/booking-list/ui/BookingList.tsx):
+  const now = dayjs()
+  if (isBookingStarted(booking, now)) return null
+
+  Положил функцию в entities/booking/lib и экспортировал из index.ts: это
+  правило брони, и форма тоже сможет её использовать.
+
+  Почему отсекаю по началу, а не по окончанию. Если бронь уже идёт,
+  validateBooking при сохранении всё равно вернёт PAST_TIME, и редактирование бы
+  не прошло. Если хочешь, чтобы текущую бронь можно было удалить, например
+  освободить комнату раньше, проверку удаления можно перенести на время
+  окончания.
+
+  Чего пока нет. now считается при каждом рендере. Если страница открыта долго и
+  время начала брони наступит, кнопки исчезнут только при следующем рендере,
+  например после смены даты или обновления списка. Автоматическое обновление по
+  таймеру можно добавить позже.
+
+> и серый фон делать по такому же принципу
+
+  Searched for 1 pattern, read 2 files (ctrl+o to expand)
+
+● Update(src\widgets\booking-list\ui\BookingList.tsx)
+  ⎿  Removed 1 line
+      19    const { workingDayStart, workingDayEnd } = BOOKING_CONFIG
+      20  
+      21    const renderActions = (booking: Booking) => {
+      22 -    if (isBookingStarted(booking, now)) return null            
+      22      const label = `${booking.start}-${booking.end}`
+      23  
+      24      return (
+
+● Update(src\entities\booking\ui\BookingItem.tsx)
+  ⎿  Added 2 lines, removed 2 lines
+      21          gap: 1,
+      22          px: 1,
+      23          borderRadius: 1,
+      24 -        bgcolor: 'primary.main',                               
+      25 -        color: 'primary.contrastText',                         
+      24 +        bgcolor: isPast ? 'action.disabledBackground' : 'primar
+         +y.main',                                                       
+      25 +        color: isPast ? 'text.secondary' : 'primary.contrastTex
+         +t',                                                            
+      26        }}
+      27      >
+      28        <Typography variant="body2" noWrap sx={{ flexGrow: 1 }}>
+
+● Сделал по тому же принципу: если начало брони уже наступило, она становится
+  серой и без кнопок ✎ и 🗑. Обе вещи считаются по одной проверке
+  isBookingStarted, один раз на бронь. tsc не запускал. IDE показывала ошибки
+  после правок, но они были промежуточными: я менял BookingList и BookingItem по
+  очереди, последняя правка их закрыла.
+
+  BookingItem.tsx (src/entities/booking/ui/BookingItem.tsx) — добавил проп
+  isPast (по умолчанию false):
+  bgcolor: isPast ? 'action.disabledBackground' : 'primary.main',
+  color: isPast ? 'text.secondary' : 'primary.contrastText',
+  Цвета взял из темы MUI — те же, что у неактивных элементов.
+
+  BookingList.tsx (src/widgets/booking-list/ui/BookingList.tsx) — проверку
+  перенёс из renderActions в map, теперь от неё зависят и цвет, и кнопки:
+  const isPast = isBookingStarted(booking, now)
+
+  <BookingItem
+    booking={booking}
+    isPast={isPast}
+    actions={!isPast && renderActions(booking)}
+  />
+  renderActions теперь только рисует кнопки и ничего не проверяет.
+
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\widgets\booking-list\ui\BookingList.tsx in
+  the IDE. This may or may not be related to the current
+  task.</ide_opened_file>
+
+> так я тут, дальше делаем yup схему. ты же помнишь что для проверки
+  пересечейний используем validateBooking, поэтому делаем функцию
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Write(src\features\booking-form\index.ts)
+  ⎿  Wrote 2 lines to src\features\booking-form\index.ts
+      1 export { createBookingSchema } from './model/bookingSchema'
+      2 export type { BookingFormValues } from './model/bookingSchema'
+
+● Написал yup-схему как функцию — features/booking-form/model/bookingSchema.ts
+  (src/features/booking-form/model/bookingSchema.ts). Правила, включая
+  пересечения, проверяет наш validateBooking. Схему и тип BookingFormValues
+  экспортировал из features/booking-form/index.ts. tsc не запускал.
+
+  createBookingSchema({ bookings, excludeId })
+
+  Как устроена
+
+  1. Проверки полей — обычный yup:
+
+  ┌───────┬───────────────────────────────────┬─────────────────────────────┐
+  │ Поле  │             Проверка              │          Сообщение          │
+  ├───────┼───────────────────────────────────┼─────────────────────────────┤
+  │ title │ необязательное, trim, максимум    │ Title must be at most 100   │
+  │       │ 100 символов                      │ characters                  │
+  ├───────┼───────────────────────────────────┼─────────────────────────────┤
+  │ date  │ обязательное                      │ Select a date               │
+  ├───────┼───────────────────────────────────┼─────────────────────────────┤
+  │ start │ обязательное                      │ Select start time           │
+  ├───────┼───────────────────────────────────┼─────────────────────────────┤
+  │ end   │ обязательное                      │ Select end time             │
+  └───────┴───────────────────────────────────┴─────────────────────────────┘
+
+  2. Бизнес-правила — один .test() на всю схему:
+  .test('booking-rules', function ({ date, start, end }) {
+    if (!date || !start || !end) return true
+    const error = validateBooking({ date, start, end }, { bookings, now:
+  dayjs(), excludeId })
+    if (!error) return true
+    return this.createError({ path: error.field, message: error.message })
+  })
+  - Если какое-то поле пустое, проверка пропускается. Иначе под пустым полем
+    вместе с «Select start time» появилась бы ещё «Start must be in HH:mm
+    format».
+  - path: error.field — ошибка встаёт под нужным полем, для этого мы и сделали
+    field в validateBooking.
+  - now: dayjs() считается при каждой проверке, поэтому «уже прошло» всегда
+    актуально.
+
+  Почему функция, а не готовая схема
+
+  Схеме нужны данные извне: загруженные брони и id редактируемой брони. Функция
+  получает их аргументами, и типы проверяются явно. С контекстом RHF они бы
+  передавались без типизации. В форме схему создадим через useMemo от bookings и
+  excludeId:
+  const schema = useMemo(() => createBookingSchema({ bookings, excludeId }),
+  [bookings, excludeId])
+  useForm<BookingFormValues>({ resolver: yupResolver(schema) })
+
+  Что стоит решить
+
+  - Длина title. Ограничение 100 символов проверяется только на клиенте, сервер
+    его не проверяет. Можно перенести в BOOKING_CONFIG и добавить в
+    validateBooking, тогда правило будет одним для клиента и сервера.
+  - BookingFormValues. Тип выводится из схемы, title в нём будет string |
+    undefined. Для defaultValues формы это подходит.
+
+> <ide_opened_file>The user opened the file c:\Users\Admin\Desktop\MadDevs\src\
+  features\booking-form\model\bookingSchema.ts in the IDE. This may or may not
+  be related to the current task.</ide_opened_file>
+
+> const path = error.field === 'date' ? 'start' : error.field
+
+    return context.createError({ path, message: error.message })
+  вот в таком ключе надо возврщать
+
+● Update(src\features\booking-form\model\bookingSchema.ts)
+  ⎿  Added 4 lines, removed 2 lines
+      21        start: yup.string().required('Select start time'),
+      22        end: yup.string().required('Select end time'),
+      23      })
+      24 -    .test('booking-rules', function ({ date, start, end }) {   
+      24 +    .test('booking-rules', ({ date, start, end }, context) => {
+      25        if (!date || !start || !end) return true
+      26  
+      27        const error = validateBooking({ date, start, end }, { boo
+          kings, now: dayjs(), excludeId })
+      28        if (!error) return true
+      29  
+      30 -      return this.createError({ path: error.field, message: err
+         -or.message })                                                  
+      30 +      const path = error.field === 'date' ? 'start' : error.fie
+         +ld                                                             
+      31 +                                                               
+      32 +      return context.createError({ path, message: error.message
+         + })                                                            
+      33      })
+      34  
+      35  export type BookingFormValues = yup.InferType<ReturnType<typeof
+           createBookingSchema>>
+
+● Переделал проверку в bookingSchema.ts
+  (src/features/booking-form/model/bookingSchema.ts) так, как ты написал. tsc не
+  запускал.
+
+  .test('booking-rules', ({ date, start, end }, context) => {
+    if (!date || !start || !end) return true
+
+    const error = validateBooking({ date, start, end }, { bookings, now:
+  dayjs(), excludeId })
+    if (!error) return true
+
+    const path = error.field === 'date' ? 'start' : error.field
+
+    return context.createError({ path, message: error.message })
+  })
+
+  - Вместо function и this теперь стрелочная функция с context во втором
+    аргументе: так проще читать.
+  - Ошибки по дате (PAST_DATE, INVALID_FORMAT) уходят на start. В форме нет
+    своего поля даты, дата выбирается в шапке, и без переноса сообщение было бы
+    некуда показать.
+
+> <ide_opened_file>The user opened the file c:\Users\Admin\Desktop\MadDevs\src\
+  features\booking-form\model\bookingSchema.ts in the IDE. This may or may not
+  be related to the current task.</ide_opened_file>
+
+> теперь давай форму делать bookingForm, дата пикера в форме не будет он один
+  общий
+
+  Searched for 1 pattern, read 2 files, ran 1 shell command (ctrl+o to expand)
+
+● select, helperText and loading exist in MUI 9. Writing the form.
+
+● Write(src\features\booking-form\lib\time.ts)
+  ⎿  Wrote 21 lines to src\features\booking-form\lib\time.ts
+       1 import { BOOKING_CONFIG } from '@/entities/booking'
+       2 import { minutesToTime, timeToMinutes } from '@/shared/lib/time'
+       3
+       4 const { workingDayStart, workingDayEnd, timeStepMinutes } = BOOK
+         ING_CONFIG
+       5 const dayStartMinutes = timeToMinutes(workingDayStart)
+       6 const dayEndMinutes = timeToMinutes(workingDayEnd)
+       7
+       8 const timeOptions = Array.from(
+       9   { length: (dayEndMinutes - dayStartMinutes) / timeStepMinutes
+     … +13 lines (ctrl+o to expand)
+
+● Write(src\features\booking-form\index.ts)
+  ⎿  Added 1 line
+      1 +export { BookingForm } from './ui/BookingForm'                  
+      2  export { createBookingSchema } from './model/bookingSchema'
+      3  export type { BookingFormValues } from './model/bookingSchema'
+
+● Now wiring it into the page: two columns, editing state, form remounts per
+  booking via key.
+
+● Write(src\pages\booking\ui\BookingPage.tsx)
+  ⎿  Added 20 lines, removed 3 lines
+       1  import { useState } from 'react'
+       2  import dayjs from 'dayjs'
+       3 -import { Container, Stack, Typography } from '@mui/material'   
+       3 +import { Box, Container, Stack, Typography } from '@mui/materia
+         +l'                                                             
+       4 +import type { Booking } from '@/entities/booking'              
+       5 +import { BookingForm } from '@/features/booking-form'          
+       6  import { DateSelector } from '@/features/date-selector'
+       7  import { BookingList } from '@/widgets/booking-list'
+       8  import { DATE_FORMAT } from '@/shared/lib/time'
+       9  
+      10  export function BookingPage() {
+      11    const [selectedDate, setSelectedDate] = useState(() => dayjs(
+          ).format(DATE_FORMAT))
+      12 +  const [editingBooking, setEditingBooking] = useState<Booking 
+         +| null>(null)                                                  
+      13  
+      14 +  const changeDate = (date: string) => {                       
+      15 +    setSelectedDate(date)                                      
+      16 +    setEditingBooking(null)                                    
+      17 +  }                                                            
+      18 +                                                               
+      19    return (
+      20      <Container maxWidth="lg" sx={{ py: 4 }}>
+      21        <Stack
+     ...
+      26          <Typography variant="h5" component="h1" sx={{ fontWeigh
+          t: 600 }}>
+      27            Meeting room booking
+      28          </Typography>
+      21 -        <DateSelector value={selectedDate} onChange={setSelecte
+         -dDate} />                                                      
+      29 +        <DateSelector value={selectedDate} onChange={changeDate
+         +} />                                                           
+      30        </Stack>
+      23 -      <BookingList date={selectedDate} />                      
+      31 +                                                               
+      32 +      <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 360
+         +px', gap: 3, alignItems: 'start' }}>                           
+      33 +        <BookingList date={selectedDate} onEdit={setEditingBook
+         +ing} />                                                        
+      34 +        <BookingForm                                           
+      35 +          key={editingBooking?.id ?? 'new'}                    
+      36 +          date={selectedDate}                                  
+      37 +          booking={editingBooking}                             
+      38 +          onDone={() => setEditingBooking(null)}               
+      39 +        />                                                     
+      40 +      </Box>                                                   
+      41      </Container>
+      42    )
+      43  }
+
+● Сделал форму BookingForm и подключил её на страницу второй колонкой. Своего
+  выбора даты в форме нет: дата приходит пропом из общего DateSelector. Я её не
+  запускал, tsc и eslint тоже не гонял. Заранее сверился только с типами MUI 9:
+  select и helperText у TextField и loading у Button там есть.
+
+  Форма — features/booking-form/ui/BookingForm.tsx
+  (src/features/booking-form/ui/BookingForm.tsx)
+
+  Пропсы: date (строка из общего селектора), booking (если передан — режим
+  редактирования), onDone.
+
+  Поля (RHF Controller + MUI):
+  - Title (optional) — TextField.
+  - Start / End — TextField с select, варианты с шагом 15 минут: Start от 09:00
+    до 17:45, End от 09:15 до 18:00. Для сегодняшней даты прошедшее время
+    недоступно в списке (правило 6).
+  - Ошибки валидации показываются под полем через fieldState.error, источник —
+    наша схема и validateBooking.
+
+  Подсказка под полями: «Duration 1 h, 30 min to 2 h». Длительность считается по
+  выбранным значениям, а границы берутся из BOOKING_CONFIG.
+
+  Схема создаётся через useMemo из createBookingSchema({ bookings, excludeId }).
+  Брони берутся из useBookings(date): этот запрос уже есть в кэше, список его
+  загрузил, так что второго запроса не будет. excludeId — id редактируемой брони
+  (правило 7).
+
+  Отправка:
+  - новая бронь — createBooking.mutate(input);
+  - редактирование — updateBooking.mutate({ id, patch });
+  - при успехе форма очищается, а onDone возвращает её в режим «New booking»;
+  - во время отправки кнопка показывает loading, а Cancel недоступна.
+
+  Ошибки сервера — общий Alert над кнопками:
+  - 409 — текст со скрина: «This slot was just taken. Bookings refreshed, your
+    input is kept. Pick another time.» Список уже перезапрошен через onSettled в
+    хуке, а форму при ошибке мы не сбрасываем, поэтому введённые данные
+    остаются (правило 8).
+  - Остальные ошибки — error.message из ApiError.
+
+  Прошедшая дата: сверху Alert «Bookings cannot be created for past dates», поля
+  и кнопка создания недоступны.
+
+  Cancel очищает форму и ошибку мутации и выходит из режима редактирования.
+
+  Вспомогательное — features/booking-form/lib/time.ts
+  (src/features/booking-form/lib/time.ts)
+
+  - startOptions, endOptions — строятся из BOOKING_CONFIG.
+  - formatDuration(90) → '1 h 30 min'.
+
+  Страница — BookingPage.tsx (src/pages/booking/ui/BookingPage.tsx)
+
+  - Две колонки через grid: таймлайн и форма шириной 360px.
+  - Состояние editingBooking: ✎ в списке передаёт бронь в форму.
+  - key={editingBooking?.id ?? 'new'} — при переходе к другой брони форма
+    монтируется заново. Значения, ошибки и состояние мутации сбрасываются сами,
+    без useEffect.
+  - При смене даты режим редактирования сбрасывается.
+
+  Что стоит учесть
+
+  1. Очистка title при редактировании не работает. Пустое название уходит как
+     title: undefined. JSON такое поле выбрасывает, а сервер объединяет
+     изменения с текущей бронью — старое название остаётся. Варианты: отправлять
+     пустую строку или null.
+  2. В End можно выбрать время раньше Start. Доступность вариантов End пока не
+     зависит от выбранного Start. Валидация такое поймает, но список можно
+     сузить до вариантов «Start + 30 мин … Start + 2 ч».
+  3. Занятые слоты в списках доступны для выбора. Пересечение показывается
+     ошибкой под полем после выбора.
+  4. Пунктирный блок «Selected» на таймлайне и удаление брони — следующие шаги.
+
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\features\booking-form\lib\time.ts in the
+  IDE. This may or may not be related to the current task.</ide_opened_file>
+
+> format duration не нужен можешь вырезать
+
+● Update(src\features\booking-form\lib\time.ts)
+  ⎿  Removed 7 lines
+      12  
+      13  export const startOptions = timeOptions.slice(0, -1)
+      14  export const endOptions = timeOptions.slice(1)
+      15 -                                                               
+      16 -export const formatDuration = (minutes: number) => {           
+      17 -  const hours = Math.floor(minutes / 60)                       
+      18 -  const rest = minutes % 60                                    
+      19 -  if (!hours) return `${rest} min`                             
+      20 -  return rest ? `${hours} h ${rest} min` : `${hours} h`        
+      21 -}                                                              
+
+● Update(src\features\booking-form\ui\BookingForm.tsx)  ⎿  Added 1 line, removed 1 line
+      35    const excludeId = booking?.id
+      36    const schema = useMemo(() => createBookingSchema({ bookings, 
+          excludeId }), [bookings, excludeId])
+      37  
+      38 -  const { control, handleSubmit, reset, setValue, watch } = use
+         -Form<BookingFormValues>({                                      
+      38 +  const { control, handleSubmit, reset, setValue } = useForm<Bo
+         +okingFormValues>({                                             
+      39      resolver: yupResolver(schema),
+      40      defaultValues: getDefaultValues(date, booking),
+      41    })
+
+● Убрал formatDuration из lib/time.ts (src/features/booking-form/lib/time.ts).
+  Вместе с ним из BookingForm.tsx (src/features/booking-form/ui/BookingForm.tsx)
+  ушла подсказка о длительности под Start/End, которая на нём держалась: расчёт
+  duration, watch и импорт BOOKING_CONFIG. tsc не запускал. Ошибки в IDE были
+  промежуточными: я удалял импорты и их использование отдельными правками.
+
+  Ограничения по длительности продолжают работать. Если выбрать меньше 30 минут
+  или больше 2 часов, validateBooking покажет ошибку под полем End.
+
+  Если подсказку хочешь оставить без форматирования, её можно вывести статичным
+  текстом: «Duration: 30 min to 2 h».
+
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\features\booking-form\ui\BookingForm.tsx
+  in the IDE. This may or may not be related to the current
+  task.</ide_opened_file>
+
+> а я забыл мы разве ошибку для 409 не описывали ? в mcw
+
+● Да, описывали. В MSW на пересечение возвращается 409 с текстом из
+  validateBooking:
+
+  409 { "code": "OVERLAP", "field": "start", "message": "This time overlaps with
+  another booking" }
+
+  http.ts превращает этот ответ в ApiError(409, 'This time overlaps with another
+  booking'), так что error.message уже содержит понятный текст.
+
+  В форме я для 409 заменил его своим CONFLICT_MESSAGE — текстом со скрина:
+  «This slot was just taken. Bookings refreshed, your input is kept. Pick
+  another time.» Логика такая: сервер сообщает только факт пересечения, а
+  остальное («список обновлён», «данные сохранены») — это то, что сделал UI.
+  Серверу об этом знать неоткуда.
+
+  Но это необязательно. Можно оставить один источник: показывать error.message
+  для всех ошибок, включая 409, а константу и проверку статуса убрать. Тогда
+  пользователь увидит «This time overlaps with another booking». Правило 8 при
+  этом всё равно выполнится: список перезапросится в onSettled, а данные в форме
+  останутся.
+
+  Я бы оставил отдельный текст для 409: он ближе к требованию «показать понятное
+  сообщение», и проверяющий сразу увидит, что этот сценарий обработан. Если
+  хочешь проще, уберу константу.
+
+  Ты сейчас менял BookingForm.tsx — твою правку я не открывал и в ответе не
+  учитывал.
+
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\entities\booking\ui\BookingItem.tsx in the
+  IDE. This may or may not be related to the current task.</ide_opened_file>
+
+> добавь цвет по mui чтобы выделить чтобы понятно какую встречу редактирую
+  пропсы уже прокинул
+
+● Update(src\entities\booking\ui\BookingItem.tsx)
+  ⎿  Added 2 lines, removed 4 lines
+      27          gap: 1,
+      28          px: 1,
+      29          borderRadius: 1,
+      30 -                                                               
+      31 -        bgcolor: isPast ? 'text.disabled' : 'primary.main',    
+      32 -        outline: selected ? `2px solid primary.main` : 'none', 
+      33 -        color: isPast ? 'text.secondary' : 'primary.contrastTex
+         -t',                                                            
+      30 +        bgcolor: selected ? 'secondary.main' : isPast ? 'text.d
+         +isabled' : 'primary.main',                                     
+      31 +        color: selected ? 'secondary.contrastText' : isPast ? '
+         +text.secondary' : 'primary.contrastText',                      
+      32        }}
+      33      >
+      34        <Typography variant="body2" noWrap sx={{ flexGrow: 1 }}>
+
+● Бронь, которую редактируешь, теперь подсвечивается фиолетовым цветом темы MUI
+  (secondary.main) с белым текстом и сразу отличается от остальных синих
+  (primary). Изменение в BookingItem.tsx
+  (src/entities/booking/ui/BookingItem.tsx), сам не проверял и tsc не запускал.
+
+  bgcolor: selected ? 'secondary.main' : isPast ? 'text.disabled' :
+  'primary.main',
+  color: selected ? 'secondary.contrastText' : isPast ? 'text.secondary' :
+  'primary.contrastText',
+
+  Строку с outline я убрал: она не работала. Внутри обычной строки `2px solid
+  primary.main` MUI не подставляет цвет темы — sx распознаёт токены вроде
+  primary.main только как целое значение. В CSS уходило буквально primary.main,
+  и браузер такую рамку игнорировал. Если нужна именно рамка, а не другой фон,
+  её задают отдельными свойствами: outline: 2px solid и outlineColor:
+  'primary.dark'.
+
+  Пустую строку перед bgcolor тоже удалил.
+
+  Подсветка появится, только если BookingList действительно передаёт в
+  BookingItem проп selected. На странице список получает только date и onEdit,
+  id редактируемой брони он не получает, а сам виджет я после твоих правок не
+  открывал. Если selected там не вычисляется, нужен проп вроде
+  selectedId={editingBooking?.id} и selected={booking.id === selectedId} в
+  BookingItem.
+
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\entities\booking\ui\BookingItem.tsx in the
+  IDE. This may or may not be related to the current task.</ide_opened_file>
+
+> не работает, что-то по mui неправильно ты сделал, посмотри в доке
+
+  Searched for 1 pattern, read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● Нашёл причину: selected не доходит до BookingItem, потому что BookingList
+  рендерит его без этого пропа. Сейчас прокину selectedId по цепочке
+  компонентов.
+
+● Update(src\pages\booking\ui\BookingPage.tsx)
+  ⎿  Added 5 lines, removed 1 line
+      30        </Stack>
+      31  
+      32        <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 360
+          px', gap: 3, alignItems: 'start' }}>
+      33 -        <BookingList date={selectedDate} onEdit={setEditingBook
+         -ing} />                                                        
+      33 +        <BookingList                                           
+      34 +          date={selectedDate}                                  
+      35 +          selectedId={editingBooking?.id}                      
+      36 +          onEdit={setEditingBooking}                           
+      37 +        />                                                     
+      38          <BookingForm
+      39            key={editingBooking?.id ?? `new-${selectedDate}`}
+      40            date={selectedDate}
+
+● Подсветка не работала не из-за MUI, а из-за пропа: selected не доходил до
+  BookingItem и всегда был false. Я его прокинул, теперь бронь, которую
+  редактируешь, должна становиться фиолетовой. В браузере не смотрел и tsc не
+  запускал. Предупреждение IDE о неиспользуемом selectedId было промежуточным:
+  последняя правка начала его использовать.
+
+  Как это теперь работает:
+  - BookingPage.tsx (src/pages/booking/ui/BookingPage.tsx) передаёт
+    selectedId={editingBooking?.id} в BookingList;
+  - BookingList.tsx (src/widgets/booking-list/ui/BookingList.tsx) принимает
+    selectedId и отдаёт в BookingItem проп selected={booking.id === selectedId}.
+
+  В документацию MUI я не заглядывал. Запись bgcolor: 'secondary.main' в sx
+  правильная: в sx-документации MUI цвета палитры задаются именно так. Если
+  после этого подсветка не появится, напиши, что видишь.
+
+> <ide_opened_file>The user opened the file c:\Users\Admin\Desktop\MadDevs\src\
+  features\booking-form\model\bookingSchema.ts in the IDE. This may or may not
+  be related to the current task.</ide_opened_file>
+
+> так пересмотри тз, все ли у нас ок по бизнес логике и что осталось по коду
+
+  Read 3 files, ran 3 shell commands (ctrl+o to expand)
+
+● Пересмотрел ТЗ и код. Бизнес-правила 1–7 закрыты и на клиенте, и на сервере.
+  Правило 8 обработано в UI, но в демо 409 пока невозможно получить. Из функций
+  пользователя не работает удаление. Ниже подробно.
+
+  Бизнес-правила
+
+  #: 1
+  Правило: В пределах рабочего дня
+  Статус: ✅
+  Где: validateBooking; Start/End предлагают только 09:00–18:00
+  ────────────────────────────────────────
+  #: 2
+  Правило: start < end
+  Статус: ✅
+  Где: validateBooking (START_NOT_BEFORE_END)
+  ────────────────────────────────────────
+  #: 3
+  Правило: Минимум 30 мин
+  Статус: ✅
+  Где: TOO_SHORT
+  ────────────────────────────────────────
+  #: 4
+  Правило: Максимум 2 ч
+  Статус: ✅
+  Где: TOO_LONG
+  ────────────────────────────────────────
+  #: 5
+  Правило: Не пересекаются, касание — не конфликт
+  Статус: ✅
+  Где: isOverlapping со строгим <; на моках проверено, 17:00–17:30 после
+  16:00–17:00 → 201
+  ────────────────────────────────────────
+  #: 6
+  Правило: Прошлое: сегодня прошедшее время недоступно, на прошедшие даты
+  создавать нельзя
+  Статус: ✅
+  Где: прошедшее время недоступно в списках; на прошедшей дате форма
+  заблокирована; на сервере PAST_DATE и PAST_TIME; у начавшихся броней нет
+  кнопок ✎ 🗑
+  ────────────────────────────────────────
+  #: 7
+  Правило: Бронь не конфликтует сама с собой
+  Статус: ✅
+  Где: excludeId в схеме формы и в PATCH на сервере
+  ────────────────────────────────────────
+  #: 8
+  Правило: 409 → сообщение, обновление списка, данные формы сохраняются
+  Статус: ⚠️
+  Где: обработка есть: алерт, инвалидация в onSettled, форма не сбрасывается. Но
+
+  в демо 409 не воспроизвести (ниже)
+
+  Почему 409 не воспроизвести. Клиент проверяет пересечение тем же
+  validateBooking по загруженному списку. Конфликтный запрос просто не уйдёт на
+  сервер, а «другого пользователя» в моке нет. Проверяющий не сможет увидеть
+  сценарий из правила 8. Нужна имитация: например, обработчик POST/PATCH с
+  какой-то вероятностью сам занимает этот слот и отвечает 409, или в UI есть
+  переключатель «Simulate conflict».
+
+  Баги
+
+  1. Название нельзя очистить при редактировании. Форма отправляет title:
+     undefined, при сериализации в JSON это поле пропадает, а сервер объединяет
+     изменения со старой бронью — старое название остаётся. Исправление:
+     отправлять title: '' или null и учитывать это на сервере.
+  2. Удаление не работает. Кнопка 🗑 есть, но onDelete нигде не передаётся, а
+     useDeleteBooking не используется. Это обязательная функция по ТЗ.
+
+  Что осталось по коду
+
+  Обязательно:
+  1. Удаление — features/delete-booking: диалог подтверждения, useDeleteBooking,
+     состояние отправки, ошибка (404 или сеть). Если удаляешь бронь, которая
+     сейчас открыта в форме, форму нужно вернуть в режим «New».
+  2. Имитация 409 в моках.
+  3. Очистка названия — исправить баг 1.
+
+  Желательно (по скрину или UX):
+  4. Пунктирный блок «Selected» на таймлайне — выбранный в форме слот.
+  getTimelinePosition для этого уже готов.
+  5. Варианты End зависят от Start: показывать только Start + 30 мин … Start + 2
+  ч. Сейчас неподходящий вариант можно выбрать, и ошибка появится только после
+  выбора.
+  6. Тесты vitest на validateBooking и isOverlapping: границы, касание,
+  excludeId, прошлое. Проверяющим это хорошо видно.
+
+  Сдача:
+  7. npm run lint, tsc и build — проверяешь ты.
+  8. README: как запустить; что сделано и что нет; решения (MSW по флагу, общий
+  validateBooking, шаг 15 мин, только десктоп); затраченное время.
+  9. git init, репозиторий, деплой на Vercel. .env с VITE_API_MOCKING=true
+  попадёт в коммит, .gitignore его не исключает. Иначе моки на Vercel не
+  включатся.
+  10. Экспорт переписки с AI.
+
+  Мелочи, можно отметить в README
+
+  - Адаптивность. Сетка 1fr 360px фиксированная, а ТЗ её оценивает. Ты решил
+    делать только десктоп — стоит написать об этом явно.
+  - «Сейчас» не обновляется само. Если страница долго открыта, прошедшее время в
+    списках и серые брони обновятся только при следующем рендере.
+  - Длину title проверяет только клиент, сервер её не валидирует.
+  - Повтор запроса на 4xx. У запросов стоит retry: 1, поэтому повторяются и
+    ответы 4xx. Это безвредно, но лишний запрос.
+  - Сверил по типам MSW 3: onUnhandledFrame — правильное имя опции.
+
+  Я бы шёл так: удаление → имитация 409 → очистка названия → тесты → README и
+  деплой.
+
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\features\booking-form\ui\BookingForm.tsx
+  in the IDE. This may or may not be related to the current
+  task.</ide_opened_file>
+
+> так зачем мне возпросиводить 409, если у нас апи нету, а мок, по сути оно
+  отработает по коду видно
+
+● Можно и не воспроизводить, это твоё решение. Но есть два довода против, сам
+  реши, насколько они весомы.
+
+  1. Этот путь ни разу не запускался. Код обработки 409 выглядит правильно:
+     алерт, onSettled перезапрашивает список, форма не сбрасывается. Но я его не
+     проверял ни в браузере, ни тестом. Ошибиться там легко: например,
+     сообщение сбросится при перемонтировании или перезапрос не сработает. «По
+     коду видно» — это ревью, а не проверка.
+  2. Проверяющий тоже не сможет его увидеть. В ТЗ правило 8 выделено отдельно, и
+     в «что показать» есть пункт «обработка серверных ошибок, в том числе
+     конфликтов». На демо проверяющий кликает по интерфейсу, и если 409 там
+     получить нельзя, этот пункт останется только в коде. Две вкладки тоже не
+     помогут: данные мока живут в памяти каждой вкладки отдельно, общей базы у
+     них нет.
+
+  Если показывать всё же хочется, не нужна целая система «чужого пользователя».
+  Хватит одного из вариантов на выбор:
+  - Параметр в URL ?conflict=1. Обработчик POST и PATCH видит его и отвечает
+    409, остальной код не меняется. В README одна строка: «откройте с
+    ?conflict=1, чтобы проверить правило 8».
+  - Тест на форму (vitest + Testing Library + MSW): ответ 409 → виден алерт,
+    данные в полях сохранились, список перезапрошен. Такой тест одновременно
+    доказывает, что путь работает, и закрывает пункт 1. Но нужно поставить
+    Testing Library и jsdom.
+  - Совсем без кода. Написать в README, как устроена обработка 409 и почему в
+    моке её не вызвать. Это честно, но слабее остальных вариантов.
+
+  Я бы взял ?conflict=1: несколько строк в моке и полминуты, чтобы проверить
+  руками. Если не хочешь, просто опиши это в README и переходим к удалению.
+
+> а в моках можно сделать чтобы запрос через раз 409 вовзращал?
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(src\mocks\handlers.ts)
+  ⎿  Added 1 line
+      60        excludeId: existing.id,
+      61      })
+      62      if (error) return validationErrorResponse(error)
+      63 +    if (isSimulatedConflict()) return simulatedConflictResponse
+         +()                                                             
+      64  
+      65      return HttpResponse.json(db.update(existing.id, patch))
+      66    }),
+
+● Сделал: теперь каждый второй успешный POST или PATCH возвращает 409. Правка в
+  handlers.ts (src/mocks/handlers.ts). Я её не запускал и tsc не гонял, а в
+  браузере сценарий 409 так и не проверялся.
+
+  let mutationCount = 0
+  const isSimulatedConflict = () => ++mutationCount % 2 === 0
+
+  const simulatedConflictResponse = () =>
+    HttpResponse.json(
+      { code: 'OVERLAP', message: 'This slot was just taken by another booking'
+  },
+      { status: 409 },
+    )
+
+  В POST и PATCH проверка стоит после validateBooking:
+  if (error) return validationErrorResponse(error)
+  if (isSimulatedConflict()) return simulatedConflictResponse()
+
+  Как это работает:
+  - Счётчик идёт только по запросам, прошедшим валидацию. Если запрос не прошёл
+    валидацию, он вернёт свою ошибку 422 или настоящую 409 и счётчик не
+    увеличит. Поэтому «через раз» считается по валидным запросам.
+  - Счётчик общий для POST и PATCH. Создал бронь — успех, следующее
+    редактирование — 409, следующий запрос снова пройдёт.
+  - База не меняется. После 409 список перезапросится, но в нём ничего не
+    изменится, и повторная отправка тех же данных пройдёт. Это ровно сценарий из
+    ТЗ: сервер вернул конфликт, хотя UI считал слот свободным.
+  - Для проверки правила 8: создай бронь — она сохранится. Создай вторую —
+    увидишь алерт, введённые данные останутся, в Network появится повторный GET.
+    Нажми «Create» ещё раз — бронь сохранится.
+
+  Что учесть:
+  - Это поведение и на задеплоенном демо. Половина сохранений будет падать — это
+    стоит указать в README, иначе проверяющий примет это за баг.
+  - После перезагрузки страницы счётчик сбрасывается вместе с базой.
+
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\pages\booking\ui\BookingPage.tsx in the
+  IDE. This may or may not be related to the current task.</ide_opened_file>
+
+> так теперь удаление, я уже накидал все, подключи по файлам что осталось и
+  проверь норм ли
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Функция удаления почти готова, но не хватает трёх вещей: диалог не отрисован
+  на странице, ошибка удаления нигде не показывается, и при удалении открытой в
+  форме брони форма не выходит из режима редактирования. Сейчас подключаю эти
+  недостающие части.
+
+● Update(src\pages\booking\ui\BookingPage.tsx)
+  ⎿  Added 7 lines
+      49            onDone={() => setEditingBooking(null)}
+      50          />
+      51        </Box>
+      52 +                                                               
+      53 +      <DeleteBookingDialog                                     
+      54 +        booking={deletingBooking}                              
+      55 +        onClose={() => setDeletingBooking(null)}               
+      56 +        onDeleted={handleDeleted}                              
+      57 +      />                                                       
+      58      </Container>
+      59 +    </Container>                                               
+      60    )
+      61  }
+
+● Подключил удаление: теперь 🗑 открывает твой DeleteBookingDialog, а «Delete»
+  удаляет бронь. Я его не запускал и tsc не гонял. Предупреждения IDE о
+  неиспользуемых Alert, deletingBooking, DeleteBookingDialog и handleDeleted
+  промежуточные: я правил файлы по частям, и последняя правка начала их
+  использовать.
+
+  Что добавил
+
+  DeleteBookingDialog.tsx
+  (src/features/delete-booking/ui/DeleteBookingDialog.tsx) — показывает ошибку
+  удаления:
+  {deleteBooking.error && (
+    <Alert severity="error" sx={{ mt: 2 }}>{deleteBooking.error.message}</Alert>
+  )}
+  Раньше при 404 (бронь уже удалена) или ошибке сети пользователь ничего бы не
+  увидел: просто погасла бы загрузка на кнопке. Теперь виден текст ошибки, а
+  список при этом обновится через onSettled.
+
+  BookingPage.tsx (src/pages/booking/ui/BookingPage.tsx):
+  - Отрисовал <DeleteBookingDialog booking={deletingBooking} onClose onDeleted
+    />. Раньше состояние deletingBooking и проп onDelete в списке были, но сам
+    диалог на странице не рендерился, поэтому 🗑 ничего не делала.
+  - handleDeleted: если удалили бронь, которая сейчас открыта в форме, форма
+    возвращается в режим «New booking». Иначе можно было бы «сохранить» уже
+    удалённую бронь и получить 404.
+
+  Проверил твой код — всё нормально
+
+  - Пока идёт удаление, диалог не закрыть ни через Cancel, ни через Esc или клик
+    мимо (handleClose с isPending).
+  - deleteBooking.reset() при закрытии — старая ошибка не появится при следующем
+    открытии диалога.
+  - aria-labelledby и aria-describedby — с доступностью всё в порядке.
+  - Кнопка Delete с loading показывает состояние отправки.
+  - Ошибку не повторяем: мутации не ретраятся.
+
+  Мелочи
+
+  1. Текст пропадает во время закрытия. После удаления booking сразу становится
+     null. Диалог закрывается с анимацией около 200 мс, и в это время текст уже
+     пустой — видно, как он мигает. Если мешает, на время анимации можно хранить
+     последнюю бронь.
+  2. Двойной клик по Delete. loading блокирует кнопку только после первого
+     рендера, но MUI делает это синхронно, так что повторного запроса быть не
+     должно.
+  3. Удаление тоже попадёт под «каждый второй — 409»? Нет, isSimulatedConflict
+     стоит только в POST и PATCH, DELETE отвечает честно.
+
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\pages\booking\ui\BookingPage.tsx in the
+  IDE. This may or may not be related to the current task.</ide_opened_file>
+
+> так время вышло, осталось только на перепроверку,  сделай полное ревью что
+  сделали сегодня  - код, архитектру, бизнесс требования с ТЗ и тд
+
+  Read 1 file, ran 1 shell command, wrote 2 memories (ctrl+o to expand)
+
+● Прочитал весь код в src. Бизнес-логика по ТЗ закрыта, архитектура чистая. До
+  сдачи нужно исправить один настоящий баг и сделать то, что сдаётся вместе с
+  кодом: README, репозиторий, деплой. tsc, eslint и build я не запускал, как ты
+  просил, а приложение не открывал в браузере. Поэтому прогони npm run lint &&
+  npm run build и пройди сценарии руками.
+
+  1. Бизнес-правила по ТЗ
+
+  #: 1
+  Правило: В пределах 09:00–18:00
+  Клиент: в списках только 09:00–17:45 и 09:15–18:00, плюс validateBooking
+  Сервер (MSW): OUTSIDE_WORKING_DAY → 422
+  Итог: ✅
+  ────────────────────────────────────────
+  #: 2
+  Правило: start < end
+  Клиент: START_NOT_BEFORE_END под End
+  Сервер (MSW): 422
+  Итог: ✅
+  ────────────────────────────────────────
+  #: 3
+  Правило: Минимум 30 мин
+  Клиент: TOO_SHORT
+  Сервер (MSW): 422
+  Итог: ✅
+  ────────────────────────────────────────
+  #: 4
+  Правило: Максимум 2 ч
+  Клиент: TOO_LONG
+  Сервер (MSW): 422
+  Итог: ✅
+  ────────────────────────────────────────
+  #: 5
+  Правило: Без пересечений, касание допустимо
+  Клиент: isOverlapping со строгим <
+  Сервер (MSW): → 409
+  Итог: ✅ (проверено на моках)
+  ────────────────────────────────────────
+  #: 6
+  Правило: Сегодня прошедшее время недоступно, на прошедшие даты создавать
+  нельзя
+  Клиент: недоступные варианты в списках, форма заблокирована, у начавшихся
+  броней нет ✎ 🗑 и серый фон
+  Сервер (MSW): PAST_DATE / PAST_TIME → 422
+  Итог: ✅
+  ────────────────────────────────────────
+  #: 7
+  Правило: Бронь не конфликтует сама с собой
+  Клиент: excludeId в схеме
+  Сервер (MSW): excludeId в PATCH
+  Итог: ✅
+  ────────────────────────────────────────
+  #: 8
+  Правило: 409: сообщение, перезагрузка списка, данные сохраняются
+  Клиент: CONFLICT_MESSAGE, onSettled → invalidate, форму при ошибке не
+  сбрасываем
+  Сервер (MSW): каждый второй валидный POST или PATCH → 409
+  Итог: ✅ в коде, в браузере не проверял
+
+  Пользовательские функции все на месте: выбор даты, просмотр, выбор времени,
+  создание, редактирование и удаление.
+
+  2. Баги
+
+  🔴 Название нельзя очистить при редактировании. Код: BookingForm.tsx:61
+  (src/features/booking-form/ui/BookingForm.tsx#L61).
+  const input = { date, start, end, title: title || undefined }
+  Бронь называлась «Demo», пользователь стёр название и сохранил. JSON
+  выбрасывает title: undefined, сервер объединяет изменения со старой бронью —
+  «Demo» остаётся. Пользователь думает, что сохранил, а изменение молча
+  потерялось. Самое простое исправление для PATCH — отправлять title: title ??
+  ''. В ТЗ title необязательный, пустая строка — нормальное значение.
+
+  🟡 Низкий контраст у прошедших броней. Код: BookingItem.tsx:30-35
+  (src/entities/booking/ui/BookingItem.tsx#L30-L35). Фон text.disabled — чёрный
+  с прозрачностью 0.38, текст text.secondary — чёрный с прозрачностью 0.6.
+  Получается серое на сером, читается плохо, а базовую доступность оценивают.
+  Лучше фон action.disabledBackground (светло-серый) и текст text.secondary.
+
+  3. Архитектура
+
+  Хорошо:
+  - FSD соблюдён: нижние слои не импортируют верхние, фичи не импортируют друг
+    друга. mocks лежит вне слоёв, и его подключает только main.tsx по флагу.
+  - Правила в одном месте: чистая validateBooking с now в параметре используется
+    и yup-схемой, и MSW. Клиент и сервер не расходятся в правилах.
+  - Сетевой слой отделён:
+  UI → хуки → bookingApi → axios (http)
+    Ошибки приводятся к ApiError в одном interceptor. Чтобы перейти на реальный
+    API, достаточно VITE_API_MOCKING=false и VITE_API_URL.
+  - Кэш: ключи иерархические, а onSettled с bookingKeys.all после мутаций
+    закрывает правило 8 и случай, когда бронь переезжает на другую дату.
+  - Форма: key для формы вместо useEffect со сбросом значений. Строка YYYY-MM-DD
+    как единственный формат даты в состоянии.
+
+  Можно отметить, но не обязательно:
+  - features/booking-form/index.ts экспортирует createBookingSchema и
+    BookingFormValues, хотя снаружи они не используются.
+  - В BookingPage.tsx (src/pages/booking/ui/BookingPage.tsx#L7-L10) пустая
+    строка посреди импортов, и delete-booking стоит после shared. Это косметика.
+
+  4. Код
+
+  - TypeScript: типы явные, any нет, as только на теле запроса в моках — для
+    мока это нормально.
+  - Схема пересоздаётся на каждом рендере, пока грузятся брони. const { data:
+    bookings = [] } при каждом рендере создаёт новый массив, поэтому useMemo
+    схемы срабатывает каждый раз, пока data не пришла. Это безвредно, только
+    лишняя работа.
+  - Алерт 409 не пропадает при изменении полей, только после следующей отправки
+    или Cancel. Это нормально, но можно сбрасывать ошибку при изменении.
+  - Списки Start и End не связаны. Можно выбрать End раньше Start — валидация
+    поймает, но UX хуже.
+  - Повтор запросов на 4xx. retry: 1 повторяет и такие ответы — лишний запрос.
+  - Часовой пояс. Время везде локальное, а клиент и мок работают в одном
+    браузере. С реальным бэкендом нужно договориться о часовом поясе. Стоит
+    строчка в README.
+
+  5. Состояния UI, адаптивность, доступность
+
+  - Загрузка, ошибка, пустой день — всё есть в BookingList, у ошибки есть Retry.
+  - Отправка формы — у кнопки loading, Cancel недоступен.
+  - Ошибки сервера — показываются в Alert, а у MUI Alert по умолчанию
+    role="alert", поэтому скринридер их озвучит.
+  - Доступность:
+    - ✅ у иконок-кнопок есть aria-label, брони размечены списком ul/li, у
+      диалога есть aria-labelledby, заголовки идут по порядку h1 → h2, у всех
+      полей есть label.
+    - ⚠️ выбранная для редактирования бронь отличается только цветом. Можно
+      добавить aria-current.
+  - ⚠️ Адаптивности нет. Сетка 1fr 360px фиксированная, а в ТЗ адаптивность —
+    отдельный пункт оценки. Если не успеваешь, хватит gridTemplateColumns: { xs:
+    '1fr', md: '1fr 360px' } — одна строка, колонки встанут друг под друга.
+    Иначе явно напиши в README, что версия только для десктопа.
+
+  6. Что сдаётся помимо кода
+
+  ┌───────────────────────────┬─────────────────────────────────────────────┐
+  │           Пункт           │                   Статус                    │
+  ├───────────────────────────┼─────────────────────────────────────────────┤
+  │ Ссылка на репозиторий     │ ❌ git не инициализирован                   │
+  ├───────────────────────────┼─────────────────────────────────────────────┤
+  │ README: запуск, что       │                                             │
+  │ сделано и что нет,        │ ❌ лежит шаблонный README от Vite           │
+  │ затраченное время         │                                             │
+  ├───────────────────────────┼─────────────────────────────────────────────┤
+  │ Демо на Vercel или        │ ❌ .env с VITE_API_MOCKING=true должен      │
+  │ Netlify                   │ попасть в коммит, иначе моки на демо не     │
+  │                           │ включатся                                   │
+  ├───────────────────────────┼─────────────────────────────────────────────┤
+  │ Переписка с AI            │ ❌                                          │
+  ├───────────────────────────┼─────────────────────────────────────────────┤
+  │ Тесты                     │ ❌ не обязательны по ТЗ, но стоит указать в │
+  │                           │  «не сделано»                               │
+  └───────────────────────────┴─────────────────────────────────────────────┘
+
+  7. Что сделать в оставшееся время, по порядку
+
+  1. Исправить очистку названия — одна строка.
+  2. Поменять цвета прошедших броней — две строки.
+  3. По желанию — адаптивную сетку, одна строка.
+  4. npm run lint && npm run build, потом пройти руками: создание, 409 на втором
+     сохранении, редактирование, удаление, прошедшая дата.
+  5. README. В нём обязательно:
+     - как запустить;
+     - 409 имитируется на каждом втором валидном сохранении — иначе проверяющий
+       примет это за баг;
+     - MSW включён по флагу;
+     - общая validateBooking;
+     - шаг 15 минут;
+     - что не сделано: тесты, адаптивность, блок «Selected», связь списков Start
+       и End;
+     - затраченное время.
+  6. git init, репозиторий, деплой, экспорт переписки.
+
+  Записал в память этот статус: что сделано, известные баги и что осталось. Если
+  какой-то пункт помочь сделать — скажи.
+> <ide_opened_file>The user opened the file
+  c:\Users\Admin\Desktop\MadDevs\src\pages\booking\ui\BookingPage.tsx in the
+  IDE. This may or may not be related to the current task.</ide_opened_file>
+
+> видно, как он мигает. Если мешает, на время анимации можно хранить последнюю
+  бронь. сделай это и баг с текстом
+
+● Update(src\features\booking-form\ui\BookingForm.tsx)
+  ⎿  Added 1 line, removed 1 line
+      58    }
+      59  
+      60    const onSubmit = ({ title, start, end }: BookingFormValues) =
+          > {
+      61 -    const input = { date, start, end, title: title || undefined
+         - }                                                             
+      61 +    const input = { date, start, end, title: title ?? '' }     
+      62  
+      63      if (booking) {
+      64        updateBooking.mutate({ id: booking.id, patch: input }, { 
+          onSuccess: finish })
+
+● Update(src\features\delete-booking\ui\DeleteBookingDialog.tsx)
+  ⎿  Added 5 lines
+      18  
+      19  export function DeleteBookingDialog({ booking, onClose, onDelet
+          ed }: DeleteBookingDialogProps) {
+      20    const deleteBooking = useDeleteBooking()
+      21 +  const [shownBooking, setShownBooking] = useState(booking)    
+      22  
+      23 +  if (booking && booking !== shownBooking) {                   
+      24 +    setShownBooking(booking)                                   
+      25 +  }                                                            
+      26 +                                                               
+      27    const handleClose = () => {
+      28      if (deleteBooking.isPending) return
+      29      deleteBooking.reset()
+
+● Update(src\features\delete-booking\ui\DeleteBookingDialog.tsx)
+  ⎿  Added 2 lines, removed 2 lines
+      53  
+      54        <DialogContent>
+      55          <DialogContentText id="delete-booking-description">
+      56 -          {booking &&                                          
+      57 -            `"${booking.title || 'Untitled'}", ${booking.start}
+         --${booking.end} will be deleted. This can't be undone.`}       
+      56 +          {shownBooking &&                                     
+      57 +            `"${shownBooking.title || 'Untitled'}", ${shownBook
+         +ing.start}-${shownBooking.end} will be deleted. This can't be u
+         +ndone.`}                                                       
+      58          </DialogContentText>
+      59  
+      60          {deleteBooking.error && (
+
+● Update(src\features\delete-booking\ui\DeleteBookingDialog.tsx)
+  ⎿  Added 1 line
+      1 +import { useState } from 'react'                                
+      2  import {
+      3    Alert,
+      4    Button,
+
+● Исправил оба бага, в браузере не проверял и tsc не запускал. Ошибка «Cannot
+  find name 'useState'» в IDE появилась между правками: импорт я добавил
+  последним.
+
+  1. Название не очищалось при редактировании. Правка в BookingForm.tsx:61
+  (src/features/booking-form/ui/BookingForm.tsx#L61):
+  const input = { date, start, end, title: title ?? '' }
+  Раньше пустое название превращалось в undefined, JSON его выбрасывал, и сервер
+  оставлял старое значение. Теперь уходит '', и сервер перезаписывает название
+  пустой строкой. В списке бронь без названия покажется одним временем, а в
+  диалоге удаления — как «Untitled». Обе проверки ждут любую пустую строку, так
+  что '' обрабатывается как отсутствие названия.
+
+  2. Текст в диалоге удаления пропадал во время закрытия. Правка в
+  DeleteBookingDialog.tsx
+  (src/features/delete-booking/ui/DeleteBookingDialog.tsx):
+  const [shownBooking, setShownBooking] = useState(booking)
+
+  if (booking && booking !== shownBooking) {
+    setShownBooking(booking)
+  }
+  Текст диалога теперь берётся из shownBooking. Когда страница передаёт null,
+  shownBooking остаётся прежним, и всю анимацию закрытия видна последняя бронь.
+  Обновление состояния прямо во время рендера — это рекомендованный в
+  документации React способ подстроить состояние под изменившийся проп, без
+  useEffect и без лишнего кадра.
+
+  Открытие диалога (open) и удаление (handleDelete) по-прежнему смотрят на
+  booking из пропсов, поэтому удалить «показанную, но уже закрытую» бронь
+  нельзя.
